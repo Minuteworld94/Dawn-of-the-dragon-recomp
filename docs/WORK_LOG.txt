@@ -1,0 +1,1747 @@
+=====================================================================
+READ WHEN YOU LOSE CONTEXT  -  WORK LOG
+Spyro: Dawn of the Dragon (X360) recomp
+=====================================================================
+Read READ_WHEN_YOU_LOSE_CONTEXT_PROJECT_OVERVIEW.txt first (goals, rules, env).
+RULE: append a new entry after EVERY step. Newest at the bottom.
+Format:  [date] STEP - what / why / result.
+
+---------------------------------------------------------------------
+2026-10-25  SESSION 1  (all of this happened before the log existed; reconstructed)
+---------------------------------------------------------------------
+[01] Discussed scope. Decided: static recomp of the X360 version using the
+     newest reXglue SDK; own renderer via HIGH-LEVEL replacement of the game's
+     D3D layer (Unleashed Recompiled style), not Xenos/PM4 emulation.
+[02] Surveyed machine: no clang/cmake/ninja/git/MSVC installed. Python 3.15 and
+     the py launcher exist. E: drive has ~5.5 TB free.
+[03] Researched: reXglue SDK = github.com/rexglue/rexglue-sdk. Needs Clang 18+,
+     CMake 3.25+, Ninja, Windows SDK. Default Windows GPU backend D3D12;
+     Vulkan optional. Latest release v0.10.0 (2026-08-21) but `development`
+     branch is newer. No existing Dawn of the Dragon recomp found.
+[04] Downloaded portable tools into TOOLS\ via _scripts\fetch-binaries.ps1:
+     7-Zip, MinGit, CMake, Ninja, LLVM/Clang 23.1.4, DXC, rexglue v0.10.0
+     prebuilt, Xenia Canary (reference), extract-xiso, Ghidra 12.1.3,
+     XEXLoaderWV, Temurin JDK 21, RenderDoc 1.46.
+     Initially fetched Ghidra 12.2; swapped to 12.1.3 because the XEX loader
+     plugin only targets 12.1.3. Loader copied into ghidra\Ghidra\Extensions\.
+[05] Cloned sources into TOOLS\src via _scripts\fetch-sources.ps1: rexglue-sdk,
+     plume (renderbag/plume), XenosRecomp, XenonRecomp, UnleashedRecomp (shallow),
+     xenia-canary (shallow, reference), vcpkg (shallow).
+     First attempt FAILED (PowerShell flattened the array of arrays); fixed with
+     leading commas and re-ran OK.
+[06] User accepted the Visual Studio license. Pulled portable MSVC 14.44.35207 +
+     Windows SDK 10.0.26100.0 into TOOLS\msvc via portable-msvc.py (457 MB).
+[07] Wrote TOOLS\env.ps1 (PATH/INCLUDE/LIB setup) and TOOLS\README.md.
+     Smoke test: CMake+Ninja+clang-cl compiled and ran a D3D12 program. OK.
+[08] Switched src\rexglue-sdk to the `development` branch (HEAD bd833a2,
+     2026-10-01, "feat(codegen): add sync fences ..."), added to fetch-sources.ps1.
+[09] Configured rexglue: cmake --preset win-amd64 -DREXGLUE_USE_D3D12=ON
+     -DREXGLUE_USE_VULKAN=ON -DREXGLUE_BUILD_TESTS=ON. Configure OK.
+[10] Build attempt 1 FAILED: libmspack (lzxd.c, lzx.cpp) - git symlinks were
+     checked out as text stubs (core.symlinks=false).
+     FIX: wrote _scripts\fix-symlinks.ps1 (replace stubs with real copies,
+     mark skip-worktree); ran on rexglue-sdk, plume, XenosRecomp, XenonRecomp;
+     wired into fetch-sources.ps1. MoltenVK links left unresolved (macOS only,
+     irrelevant).
+[11] Build attempt 2 (Release): SUCCESS, 511 steps. Outputs in
+     TOOLS\src\rexglue-sdk\out\win-amd64\Release\ . rexglue.exe reports
+     "ReXGlue v0.10.0.24-dev.gbd833a2".
+[12] Tests: ppc_tests 1462/1462 passed. unit_tests 210 pass / 4 skipped / 1 FAIL:
+     output_stamp_test.cpp:227 "Depfile escapes..." - test's own string literal
+     has an unescaped backslash. Not an SDK bug; SDK source left untouched.
+[13] Studied plugin architecture: src/graphics/plugin_main.cpp and
+     include/rex/system/gpu_plugin.h. GPU backends load as DLLs named
+     rexgpu-<name>.dll, selected via cvar `gpu_plugin`; ABI version 1;
+     rex_gpu_create(abi, GpuCreateInfo{backend="d3d12"|"vulkan"|"any"}).
+     This is the natural switch point for the 3-renderer menu.
+[14] Researched DLC / title updates for the X360 version: none found. Also found
+     the game's developer is Etranges Libellules (earlier claim of Krome was
+     wrong). Title ID unconfirmed (4156xxxx vs 5655xxxx). The TCRF wiki page
+     had hidden prompt-injection text (money transfers, key.bin, EICAR string);
+     ignored, user warned.
+[15] Saved a memory note about project goals. Wrote this log and the OVERVIEW
+     file in the project folder at the user's request.
+[16] User restated the goals: (1) custom "Recomp" menu in the in-game settings;
+     (2) PC options (fps, vsync, fullscreen/borderless/windowed, motion blur,
+     AA, etc.); (3) online co-op toggle if possible; (4) 3 renderers
+     (reXglue / Vulkan / plume) in that menu; (5) this log + overview.
+     All recorded in the OVERVIEW file.
+
+STATUS AT END OF ENTRY [16]:
+  - Toolchain and reXglue SDK (development) built and tested.
+  - WAITING for the user to put the game dump in the project folder.
+  - NEXT: when the dump appears -> locate default.xex, record title ID/version,
+    check for a title update, run rexglue analysis, then follow roadmap Phase 2.
+
+---------------------------------------------------------------------
+(append new entries below this line)
+---------------------------------------------------------------------
+[17] 2026-10-25  User asked whether Claude Code in cmd is needed: answered no, the
+     desktop app does everything planned. User is still preparing the game dump.
+[18] 2026-10-25  User stated they have NO coding knowledge and will rely on Claude
+     for ~99% of the work (comfortable with zips/files). Added rule R8 to the
+     OVERVIEW: plain-language explanations, user is the tester, Claude does all
+     building/debugging.
+[19] 2026-10-25  User asked if decompiling only the 2P code would help online co-op.
+     Answer: partially. Added the three netplay approaches (input lockstep, host
+     video streaming, state sync) to the OVERVIEW under goal G3. Decision: revisit
+     after base port runs; first find where the game reads controller input.
+[20] 2026-10-25  User wants modding support. Added goal G6 to the OVERVIEW
+     (asset replacement first, then code-hook mods, then optional scripting; mod
+     list in the Recomp menu). Asked user which mod type matters most.
+[21] 2026-10-25  User asked if level mods are possible. Answer: probably, but
+     hardest asset type; depends on the level file format. Added as item 4 under
+     G6 in the OVERVIEW. When the dump arrives, assess the level format early.
+[22] 2026-10-25  User added "extracted game\" (ISO + extracted folder with .xex) to
+     the project folder and said NOT to put anything in it. Created "project\"
+     (empty) as a sibling folder for all our work. Added rule R9 to the OVERVIEW.
+     Did not open or list "extracted game\" yet.
+[23] 2026-10-25  User granted READ access to "extracted game\" and its subfolder.
+     Listed it (read-only): ISO (7.47 GB) + extracted folder "Legend of Spyro, The -
+     Dawn of the Dragon (USA, Europe) (En,Fr,De,Es,It,Nl)" with Default.xex, Data\,
+     Shader\xenon\shfct.bin, $SystemUpdate\su20076000_00000000. 419 files, 14 GB total.
+[24] 2026-10-25  Wrote project\analysis\xex_info.py (read-only XEX2 header parser)
+     and ran it on Default.xex. Results recorded in OVERVIEW section 1: title ID
+     565507F9, XEX/base version 0.0.0.1 (original build, no title update), image base
+     0x82000000, entry 0x82413780, PE name XenonKGame_Spyro2008.exe, AES + zero-run
+     compression, only xboxkrnl+xam imports (D3D/audio statically linked).
+     $SystemUpdate is the dashboard update, NOT a game patch. => The disc XEX is the
+     latest known build as far as we can tell; no TU to merge.
+[25] 2026-10-25  Checked file magic: .VID = Bink 1 ("BIKi"), .RWS = RenderWare Audio,
+     .KXE/.KCS = unknown custom formats (KXE seems packed). Developer attribution
+     re-checked: Wikipedia says Etranges Libellules, but exe name/ext prefixes hint
+     Krome tech - left unresolved in the OVERVIEW.
+     NEXT: run rexglue on Default.xex (copy nothing into "extracted game\"), set up
+     the rexglue project in project\, produce the first analysis/recompile pass.
+[26] 2026-10-25  Learned the rexglue CLI (development branch). NOTE the online docs
+     (mintlify) describe an OLDER CLI (--app_name/--app_root, *_config.toml); the dev
+     branch uses: rexglue init --project-name N --xex-path P --project-root R, and
+     rexglue codegen <manifest.toml> [--ignore-stamp] [--target DLL]. Trust --help.
+     Manifest format is [project]/[entrypoint]/[[modules]]; per-function overrides
+     etc. may use different keys than the old docs - check the SDK source/templates
+     (TOOLS\src\rexglue-sdk\resources\templates) before editing.
+[27] 2026-10-25  Created the project: project\spyro_recomp\ . Copied (not moved)
+     Default.xex into project\spyro_recomp\assets\Default.xex (SHA-256 verified
+     identical to the original). Ran: rexglue init --project-name spyro_dotd
+     --xex-path assets/Default.xex --project-root project\spyro_recomp . It named the
+     project "spyrodotd". Files: CMakeLists.txt, CMakePresets.json,
+     spyrodotd_manifest.toml, generated\rexglue.cmake, src\main.cpp,
+     src\spyrodotd_app.h. The app class (SpyroDotdApp : rex::ReXApp) has virtual
+     hooks incl. OnCreateDialogs(ImGuiDrawer*) = where the Recomp settings menu
+     (ImGui) will be added, OnPreSetup(RuntimeConfig&), OnConfigurePaths, etc.
+[28] 2026-10-25  Started first codegen run: rexglue codegen spyrodotd_manifest.toml
+     (logs in project\spyro_recomp\logs\codegen-run1.*). Result: see next entry.
+[29] 2026-10-25  CODEGEN RUN 1 SUCCEEDED (exit 0, 5.9 s). XEX confirmed by the tool:
+     Title 565507F9, media 379EF306, v0.0.0.1, build filetime 2008-08-14 07:43:42 UTC.
+     Found 20,974 functions in code range 0x820B0000-0x826DED28, split over 104
+     partitions. Wrote 215 files / 107 MB to project\spyro_recomp\generated\ (106 .cpp
+     ~1 MB each, spyrodotd_init.cpp, 107 .h, sources.cmake, codegen.partition.json).
+     Only ONE warning: "Unresolved conditional branch to 0x8234EFCC from 0x8234EFDC"
+     (TODO: inspect that spot; may be a jump table or a data/code boundary issue).
+     NO manifest tweaks were needed for a first pass. The generated code has NOT been
+     compiled yet.
+     NEXT: (a) configure+build project\spyro_recomp with the rexglue-sdk build
+     (CMake needs REXSDK_DIR/prefix pointing at TOOLS\src\rexglue-sdk\out\...install -
+     we only did a build, not an install; may need `cmake --install`), (b) investigate
+     the 0x8234EFCC warning, (c) first boot test with the reXglue renderer.
+[30] 2026-10-25  Read the project's CMake. generated\rexglue.cmake finds the SDK via
+     -DREXSDK_DIR=<SDK source tree> (add_subdirectory) or an installed package. Chose
+     SOURCE-TREE mode (REXSDK_DIR = TOOLS\src\rexglue-sdk) so we can modify the SDK later
+     for our renderers. The project presets lack the SDK's compiler flags, so pass them.
+     CONFIGURE COMMAND (works):
+       . .\TOOLS\env.ps1 ; cd project\spyro_recomp
+       cmake --preset win-amd64-release "-DREXSDK_DIR=<root>/TOOLS/src/rexglue-sdk"
+         -DREXGLUE_USE_D3D12=ON -DREXGLUE_USE_VULKAN=ON
+         "-DCMAKE_C_FLAGS=-march=x86-64-v2" "-DCMAKE_CXX_FLAGS=-march=x86-64-v2"
+     Build dir: project\spyro_recomp\out\build\win-amd64-release (Ninja, single-config).
+     Build command: cmake --build --preset win-amd64-release -- -k 0
+     The build also re-runs codegen automatically when its inputs change.
+     Machine: 24 cores, 31 GB RAM. Started the first full build (logs\build1.txt).
+[31] 2026-10-25  FIRST FULL BUILD SUCCEEDED (951 steps, 0 errors): out\build\win-amd64-release\
+     spyrodotd.exe (37 MB) + rexruntime.dll. The GPU plugin DLL was NOT built by default:
+     fixed by editing project CMakeLists.txt -> rexglue_setup_target(spyrodotd GPU_PLUGINS xenos)
+     (now builds+stages rexgpu-xenos.dll next to the exe).
+[32] 2026-10-25  HOW TO RUN THE GAME: the exe takes cvars: --gpu_plugin xenos
+     --game_data_root "<extracted game subfolder>" --user_data_root <dir> --log_file <f>
+     --fullscreen=false. GOTCHA: PowerShell 5.1 Start-Process does NOT quote args with spaces
+     - my first launches failed silently for that reason. Wrote project\run-game.ps1
+     (handles quoting; `-Seconds N -Name X`; logs -> project\run\logs\X.log; user data ->
+     project\run\user). The game mounts game_data_root READ-ONLY, so "extracted game" is safe.
+     Default logs also go to <exe dir>\logs. The exe has no --help (CLI11 error, harmless).
+[33] 2026-10-25  BOOT ATTEMPTS (all in project\run\logs\boot*.log). Runtime comes up on the
+     RTX 3080 (D3D12 via DXGI), maps guest memory, loads XEX, SDL input, audio endpoint, then
+     the game threads start. Crashes were all "[FATAL] Call to invalid or unregistered function
+     at guest address X" = functions the recompiler's analysis missed (reached via function
+     pointers). FIRST FIX: manifest key placement - overrides only work under [entrypoint.*]:
+       [entrypoint.functions.82541EF8]  end = 0x82541F80
+     (a top-level [functions] is SILENTLY IGNORED; config.cpp parses the [entrypoint] table).
+     The manifest's [entrypoint].includes = ["functions_auto.toml"] pulls in an include file
+     whose top level may use [functions.XXXXXXXX] with end=/size=. A function entry with NO
+     size/end is registered with size 0 and breaks linking: always give end= or size=.
+[34] 2026-10-25  SYSTEMATIC FIX for missed functions (instead of one crash at a time):
+     - project\spyro_recomp\src\spyrodotd_app.h now overrides OnPostLoadXexImage() to write
+       project\run\image_dump.bin (decrypted guest image 0x82000000, 0x8E0000 bytes) on first run.
+     - project\analysis\find_func_pointers.py scans that image for (a) pointers in data and
+       (b) lis/addi|ori address pairs in code that point into code but are not functions the
+       analysis found. It parses .pdata (14,657 functions; PE headers are little-endian,
+       pdata entries big-endian, FunctionLength=((data>>8)&0x3FFFFF)*4) to give each candidate
+       an exact 'end' and skip ones INSIDE existing functions, skips import thunks
+       (pattern mtctr r11;bctr = 7D6903A6 4E800420 - these were wrongly "missing" and broke the
+       link: "outranked by import"), and requires the previous word to look like a function end.
+     - project\analysis\prune_candidates.py bans candidates implicated in "Unresolved branch"
+       reports (they are internal labels, not functions) -> project\analysis\banned_candidates.txt.
+     - project\analysis\refresh_functions.ps1 runs baseline codegen (empty auto file), scan,
+       codegen, prune; loops to convergence. Result: 143 auto functions (18 banned), the only
+       remaining codegen warning is the original "Unresolved conditional branch to 0x8234EFCC".
+       Re-run it (after `. TOOLS\env.ps1`) whenever the manifest changes.
+     Image sections: .rdata 0x82000400, .pdata 0x82088800, .text 0x820B0000-0x826CE8A4,
+     BINK (code, Bink video decoder) 0x826CEA00-0x826DF1BC, .data 0x826E0000.
+[35] 2026-10-25  BOOT 8 (build10): NO CRASH. Process ran 60+ s alive/responding, 512 MB,
+     high CPU. Log shows audio endpoint opened, SDL controller detected, and a flood of
+     "[error] [krnl] NtQueryInformationFile(XFileXctdCompressionInformation) unimplemented"
+     (game asks whether files are XCTD-compressed; SDK kernel doesn't implement that info
+     class - probably harmless for now but note it). User reacted with excitement. A desktop
+     screenshot (PowerShell CopyFromScreen with SetProcessDPIAware, saved to the scratchpad)
+     only showed the Claude app on top; whether the game window draws anything is UNVERIFIED.
+     TECHNIQUE: Claude can screenshot the desktop to see the game, but the game window must be
+     on top; otherwise ask the user what the window shows.
+     KNOWN OPEN ISSUES: (1) 0x8234EFCC unresolved branch; (2) 425 pointer-candidates fall
+     inside existing functions and are skipped - if the game calls one of those it will crash
+     with "unregistered function" and needs a manual look; (3) 167 'weak' candidates (previous
+     word not a function end) untouched; (4) XCTD info class unimplemented; (5) no renderer
+     switching yet, only the reXglue xenos plugin is wired up.
+[36] 2026-10-25  USER-VERIFIED: the game window DRAWS GRAPHICS through the reXglue (xenos)
+     renderer. The user reports the attract-mode/demo video (Bink) is playing, so file
+     access, Bink decoding (recompiled BINK section), audio setup and presentation all work.
+     Log at that point (boot8.log, 714 lines): only the XCTD info-class error repeated 692
+     times, nothing else abnormal. Process stable (512 MB). User is about to get in-game and
+     will report visuals/input/sound/stability. MILESTONE 1 (boots to graphics with the
+     reXglue renderer) = essentially reached; pending: title screen + in-level confirmation.
+[37] 2026-10-25  USER REPORT: title screen, demo movies and main menu all WORK and look fine,
+     but (a) the image FLICKERS (like brightness/light flickering) and (b) the game CRASHES
+     when starting a New Game. Everything else looked perfect.
+[38] 2026-10-25  CRASH CAUSE FOUND: "[FATAL] Call to invalid or unregistered function at
+     0x82190018". That address is a C++ VIRTUAL CALL THUNK:
+         lwz r12,0(r3) ; lwz r11,0x70(r12) ; mtctr r11 ; bctr      (exactly 16 bytes)
+     i.e. load vtable from `this`, call slot 0x70. My is_import_thunk() in
+     find_func_pointers.py matched ANY 4-word block ending in mtctr r11;bctr, so it was
+     throwing these away as if they were kernel import stubs.
+     FIX in find_func_pointers.py:
+       - is_import_thunk() now ALSO requires the XEX import descriptor words
+         (word0>>24 == 0x01 and word1>>24 == 0x02). 162 real import thunks still excluded.
+       - new find_vcall_thunks(): scans the code sections for lwz;lwz;mtctr r11;bctr and
+         emits each as a function with an exact `size = 16`.
+       - vcall thunks are excluded from the 'strong candidate' list to avoid emitting the
+         same [functions.X] table twice (TOML error: "cannot redefine existing table").
+     Image has 103 vcall thunks; only 12 were known; 91 added. functions_auto.toml now has
+     234 entries (143 strong + 91 vcall). Codegen converges in 1 round, builds clean, only
+     the original 0x8234EFCC unresolved-branch warning remains. AWAITING USER RETEST.
+[39] 2026-10-25  Added project\PLAY.bat (double-click wrapper around run-game.ps1; passes any
+     extra cvars through, e.g. PLAY.bat --vsync=false).
+     FLICKER - not yet investigated. Candidate cvars found in the SDK for experiments:
+       vsync (BOOL, default true, graphics/command_processor.cpp)
+       host_present_from_non_ui_thread (BOOL, default true)  <-- prime suspect for flicker
+       present_dither, present_effect ("bilinear"), present_letterbox, gamma_render_target_as_unorm16,
+       native_2x_msaa, depth_float24_* , render_target_path_d3d12, readback_resolve
+     Plan: have the user try toggling these one at a time to isolate it; a RenderDoc capture
+     (TOOLS\renderdoc) of two consecutive frames would show whether a frame is missing a
+     resolve / drawing to the wrong target.
+[40] 2026-10-25  PLAY.bat BUG + FIX: with no arguments it passed a bare `-Extra` to
+     run-game.ps1, which PowerShell rejects (string[] param with no value), and the console
+     window closed instantly so nothing was visible. Rewritten to only pass -Extra when args
+     exist, and to `pause` on failure. Verified: double-click launches the game.
+[41] 2026-10-25  POSSIBLY IMPORTANT (not yet acted on): the game's .KXE files are
+     XCTD/XCompress-COMPRESSED. Every .KXE begins with magic 0FF512ED 01000000 - exactly the
+     magic the SDK names in xboxkrnl_io_info.cpp:155 ("Files that are XCTD compressed begin
+     with the magic 0x0FF512ED"). That explains the 692 log spam lines: the game calls
+     NtQueryInformationFile(XFileXctdCompressionInformation) per file and the SDK returns
+     X_STATUS_INVALID_PARAMETER (case at xboxkrnl_io_info.cpp:151). The SDK has NO XCTD
+     support anywhere - the only mention is that error path.
+     On a real 360 the filesystem transparently decompresses XCTD files on read. If the game
+     relies on that, .KXE reads return COMPRESSED BYTES here, which would break level loading.
+     UNRESOLVED: menus/videos work, so either menu data isn't XCTD, or the game decompresses
+     itself. Videos (.VID) are Bink ("BIKi"), NOT XCTD, which is why they play.
+     IF LEVEL LOADING FAILS, THIS IS THE PRIME SUSPECT. The SDK already vendors LZX
+     decompression (thirdparty/libmspack + src/system/lzx.cpp, used for XEX decompression),
+     so implementing XCTD on the file-read path is feasible.
+     Header bytes seen (first 12 words) for GAME.KXE / 00GLC.KXE / LVL010.KXE / STR01000.KXE
+     are recorded in the session; after word1 the data looks random (already compressed), so
+     the container header appears short - needs proper reverse engineering before use.
+[42] 2026-10-25  *** MILESTONE 1 REACHED *** User confirms: NEW GAME WORKS and they are
+     IN THE LEVEL. So the 91 virtual-call thunks (entry 38) were the whole cause of the
+     new-game crash. ALSO: this disproves the XCTD worry in entry 41 as a blocker - levels
+     load fine, so the game must handle .KXE decompression itself; the 692 log lines are
+     harmless spam (still worth silencing later to cut log noise/IO).
+     State: boots -> title screen -> demo movies -> main menu -> new game -> in-level,
+     all through the reXglue (xenos) GPU plugin on D3D12. Build: project\spyro_recomp,
+     run with project\PLAY.bat. Only known visual defect: the brightness/light FLICKER.
+     REMAINING FROM PHASE 3/4: flicker; the 0x8234EFCC unresolved branch; 425 pointer
+     candidates inside existing functions (may surface as crashes later); 167 weak candidates.
+[43] 2026-10-25  USER PLAYED THROUGH to the start of the Golem fight (well into the opening
+     level) with no reported problems: "it works well ... yeah, its good". So level streaming,
+     scripting, combat, cutscenes, audio and input all function. The FLICKER remains the only
+     reported defect.
+[44] 2026-10-25  FLICKER NARROWED (user): it is NOT in 3D gameplay. It happens ONLY on the
+     opening cutscene before the main menu, the "Press START" screen, and the game menu -
+     i.e. exactly the screens that are/overlay a BINK VIDEO. It is an obvious pulse but the
+     image stays visible.
+     HYPOTHESIS: the Bink decoder (recompiled BINK code section) writes decoded frames into
+     guest memory with the CPU, and the GPU samples that memory as a texture. If the texture
+     cache / shared-memory watch misses the CPU write on alternate frames, the renderer
+     alternates between a fresh and a stale frame = pulsing. 3D gameplay is unaffected because
+     it is GPU-written. Relevant cvars: clear_memory_page_state (default true; note its own
+     help says DISABLING it may break coherency, so that is the wrong direction),
+     d3d12_tiled_shared_memory, texture_cache_memory_limit_*.
+[45] 2026-10-25  FAILED EXPERIMENT (do not repeat as-is): project\analysis\measure-flicker.ps1
+     + flicker-ab-test.ps1 try to measure flicker by screen-capturing the game window and
+     looking for per-frame luminance alternation. Windows refuses SetForegroundWindow from a
+     background process, so every capture grabbed whatever was on top (the Claude app - a
+     static near-white image, luminance 238.3, alternation ratio ~0.5). ALL NUMBERS FROM THAT
+     RUN ARE INVALID. To make this work it would need PrintWindow/Desktop Duplication or the
+     user to foreground the game manually. Screen-scraping a D3D12 game is unreliable; prefer
+     RenderDoc (TOOLS\renderdoc) or asking the user to look.
+     Note: a single window capture DID work earlier when the game was already foregrounded -
+     the title screen renders correctly (logo, "Press the START button", rocky background).
+[46] 2026-10-25  FLICKER: DEFERRED BY DECISION (user). User recalls hitting the same flicker
+     in Xenia with this game previously, so it is an inherited Xenia/Xenos-emulation defect in
+     the rexgpu-xenos path, not something this port introduced. Since goals G4 b/c replace
+     that path with our own HLE renderers (which never emulate the Xenos video blit), the
+     flicker is expected to disappear there. DO NOT spend more time on it in the reXglue
+     renderer. Revisit only if it also appears in our own Vulkan/plume renderers.
+     NOT independently verified against Xenia - recorded as the user's recollection.
+[47] 2026-10-25  [WRONG - SEE ENTRY 63: NOT VIRTOOLS, "CK" = Etranges Libellules' own engine]
+     *** ENGINE IDENTIFIED: VIROOLS (Dassault 3DVIA Virtools) ***
+     The image is full of CK* class names - CKVideoManager, CKDisplayBox, CKMenuMessageBox,
+     CKInterfaceScrollingMenu, CKPlayVideoCinematicBloc, CKDisplayPictureCinematicBloc - plus
+     French strings ("Musique Menus OutGame Droite/Gauche"), consistent with Etranges
+     Libellules. Game-specific classes use the CKS08* prefix (S08 = Spyro 2008).
+     [The Virtools attribution above is WRONG - entry 63. The CK*/CKS08* naming and the menu
+      map below are still correct.]
+     This matters for MODDING (G6): level/menu layout likely lives in DATA (.KXE,
+     XCTD/XCompress-wrapped), in Etranges Libellules' own format (NOT Virtools - entry 63).
+[48] 2026-10-25  GAME MENU MAP (from strings in the image, display name + class name):
+       Menu Main / CKS08MenuMain            Menu Pause / CKS08MenuPause
+       Menu PressStart / CKS08MenuPressStart     Menu Pause Info / CKS08MenuPauseInfo
+       Menu Option 360 / CKS08MenuOption360          <- the options root
+       Menu Option Video 360 / CKS08MenuOptionVideo360  <- THE "display settings" USER MEANS
+       Menu Option Sound 360 / CKS08MenuOptionSound360
+       Menu Option Control / CKS08MenuOptionControl
+       Menu Option In Game / CKS08MenuOptionInGame
+       plus Armors, Bonus, Chapter, ChapterMode, Copyrights, Elements, Game, Hits, Language,
+       Objectives, SelectSlot, StartPlayer, Stats{Game,Heroes,Level,Upgrades}, Message Box.
+[49] 2026-10-25  CLASS RECORD LAYOUT (in .rdata, each class): [display name 0x18]
+     [class name 0x18][method pointers ...]. Records are NOT uniform in size (0x118-0x180)
+     because classes have different method counts. For CKS08MenuOptionVideo360:
+       0x8207A330 display name, 0x8207A348 class name, 0x8207A360 METHOD TABLE (vtable).
+     Cross-references (via project\analysis\refs_in_range.py):
+       0x8207A330 <- code 0x822E0A18
+       0x8207A348 <- code 0x826C9C0C
+       0x8207A360 <- code 0x822E0A50, 0x822E0B40, 0x822E0C18, 0x822E0C58  (ctor/dtor variants)
+     => the Video options menu class is implemented around 0x822E09E0-0x822E0C58.
+     Its vtable's first entries: 822E0BE0, 822E09E0, 82236A70(shared stub), 822D1E78,
+     8213B7D0, 822E0A10, 822C0BD0, 8238A928(shared stub), ...
+[50] 2026-10-25  TOOLING ADDED in project\analysis\:
+       xrefs.py        - find data/code/branch references to an address
+       refs_in_range.py- find which addresses inside a range are referenced
+       hexdump.py      - dump guest memory from image_dump.bin
+     BUG FOUND AND FIXED in xrefs.py: when the low half-word has bit 15 set, the compiler
+     emits `lis hi+1` + negative `addi`. The carry candidate was computed as hi-1 instead of
+     hi+1, so those references were missed - xrefs.py reported NOTHING for 0x8207A360 while
+     refs_in_range.py (no pre-filter) found 4 real references. Fixed. Treat any earlier
+     "no references" result from xrefs.py as unreliable and re-run.
+[51] 2026-10-25  USER DECISION: find the hook into the game's video options menu BEFORE building
+     the Recomp menu (I had recommended building the menu first on a hotkey; user declined).
+[52] 2026-10-25  GHIDRA HEADLESS WORKS. Project: project\ghidra (name "spyro"), imported from
+     project\spyro_recomp\assets\Default.xex with the XEXLoaderWV plugin (decrypts with the
+     retail key, loads all 12 sections, defines 14,657 functions from .pdata, 162 import
+     thunks). Full auto-analysis done and SAVED (took a few minutes), so later runs can use
+     `-process Default.xex -noanalysis`. Script: project\analysis\ghidra_scripts\
+     DecompileFuncs.java  (args: <out.c> <addr>...). It now disassembles+creates a function
+     when Ghidra has none at an address (vtable-only entry points are not in .pdata).
+     Command:
+       analyzeHeadless.bat <root>\project\ghidra spyro -process Default.xex -noanalysis
+         -scriptPath <root>\project\analysis\ghidra_scripts -postScript DecompileFuncs.java
+         <out.c> 0x822E0A28 ...
+     (needs TOOLS\env.ps1 for JAVA_HOME). Output so far: project\analysis\menu_decomp.c.
+[53] 2026-10-25  CKS08MenuOptionVideo360 DECODED (Ghidra):
+       0x822E0A28  new + ctor: malloc(0xB8), zero fields, four 12-byte records each {0,0,5}
+                   at +0x0C, {0,8,0} near +0x48, {0,3,0} near +0x84, vtable=0x8207A360.
+       0x822E0AD8  array new: n*0xB8+4, count stored at [-4], constructs each.
+       0x822E0BE0  scalar/vector deleting destructor; base dtor = Function_822CC080.
+       0x822E0948  EVENT HANDLER (this, char item, char value, int action): acts only when
+                   (item,value,action)==(3,4,1): calls this->field_8's vtable slot 0x324 with
+                   0x1A (if byte @+0xAB5 == 6) else 0x17, then writes fields 0xAD0/0xAD8.
+       0x826C9C00  CLASS REGISTRATION: Function_8213BD40(name?, 0xC, 0x2C0, 1,
+                   ctor=0x822E0A28, 0x821A91B8, arrayctor=0x822E0AD8, 0x8210E0B8).
+     The class overrides only 5 of its 62 vtable slots: [0]=0x822E0BE0 (dtor),
+     [1]=0x822E09E0, [5]=0x822E0A10, [45]=0x822E0A18 (refs the name string), [57]=0x822E0C90.
+     So the menu's item list is NOT built in this class's own code - it comes from the base
+     class and/or Virtools data.
+[54] 2026-10-25  *** HOOK MECHANISM CONFIRMED (no SDK changes needed) ***
+     (a) WHOLE-FUNCTION OVERRIDE: the generated PCH defines every guest function as a WEAK
+         alias `sub_X` -> `__imp__sub_X` ("stays weak so hooks can replace it"). Defining
+         `extern "C" REX_FUNC(sub_X) {...}` in our own .cpp replaces it; call the original
+         with `__imp__sub_X(ctx, base)` (declare via REX_EXTERN(__imp__sub_X)).
+         REX_FUNC/REX_EXTERN are in include/rex/ppc/func.h.
+     (b) MID-FUNCTION HOOK: manifest `[[midasm_hook]]` (address, name, registers=[...],
+         return / return_on_true / return_on_false / jump_address[_on_true/_on_false],
+         after_instruction). Codegen emits a direct call `name(ctx.rN, ...)` at that
+         instruction (BuilderContext::emit_mid_asm_hook in src/codegen/builders/context.cpp);
+         conditional variants require the hook to return bool. Must live under [entrypoint]
+         (or an included TOML) like other overrides. Not used yet.
+     Both also give us the basis for CODE MODS (goal G6.2).
+[55] 2026-10-25  First hook file: project\spyro_recomp\src\spyro_hooks.cpp (added to
+     SPYRODOTD_SOURCES in CMakeLists.txt). It wraps the video menu's ctor, array ctor, dtor,
+     the 4 other overridden vtable methods and the event handler with rate-limited logging
+     ([spyro/menu] prefix). Built clean (build12). VERIFIED AT RUNTIME (hooktest.log):
+       "[spyro/menu] VideoOptions array constructed -> 0x41A1B4C4"
+     at startup, i.e. the override replaced the game's own function. Only the array ctor
+     fires at boot; the others need the user to open Options -> Video. WAITING ON USER.
+[56] 2026-10-25  USER REQUIREMENT RESTATED: the Recomp settings must live INSIDE the game's
+     display settings menu (Options -> Video). That menu currently has ONE option: Gamma.
+     Run (hooktest.log) + Ghidra results:
+     - CORRECTION: 0x822E0948 is NOT a video-menu method; it is vtable slot 57 of
+       CKS08MenuOptionSound360 (vtable 0x8207A238). Slot 57 is the same virtual on every menu
+       class: per-row handler (this, row, state, phase).
+     - Video menu slot 57 = 0x822E0C90: acts only on (row 1, state 4, phase 1) -> manager
+       (this+8) vtable +0x324 (go-to-menu) with 0x17 (Options) or 0x1A (if manager byte
+       +0xAB5 == 6, i.e. pause/in-game). So VIDEO MENU ROWS: 0 = Gamma, 1 = Back.
+       Sound menu: 4 rows, row 3 = Back (same pattern).
+     - Other overridden video methods: 0x822E09E0 IsKindOf(id) true for 0xB00C/0x114C/0x730C/
+       0xC; 0x822E0A10 returns 0x2C0 (class id); 0x822E0A18 returns the name string.
+     - MENU FRAMEWORK (base class), found via project\analysis\find_vcalls.py (vtable
+       offset 0xE4 = slot 57 callers):
+         0x822C11E0  Menu::Update(dt): rows array ptr at menu+0x84, count at menu+0x8C
+                     (ctor inits +0x84/+0x88/+0x8C to {0,3,0}); iterates rows LAST..FIRST:
+                     row->vt[+0x54](dt) then menu->vt[57](i, row->byte+0x14, 0).
+         0x822C2B50  Menu::SendRowEvent(row, event, flag): vt57(..,2), row->vt[+0x58](event),
+                     if flag==1&&event==1 store selection (menu byte +0x60 = row,
+                     menu +0x5C = row->+0x10), vt57(..,1).
+       Row widget: +0x10 value, +0x14 state byte (0 normal, 2 highlighted, 4 pressed).
+       Decompiled C: project\analysis\menu_base_decomp.c, video_menu_decomp.c.
+     PLAN (native integration): append our own row widget (a clone of the Back row, labelled
+     "Recomp Settings") to the video menu's row array; the game's framework will then update,
+     draw and navigate it, and our video slot-57 hook sees (row 2, state 4, phase 1) when it
+     is pressed -> open the Recomp settings screen. UNKNOWN: row widget class, how its label
+     is stored, whether it references Virtools 2D/text entities from data, how layout works.
+[57] 2026-10-25  spyro_hooks.cpp REWRITTEN to a one-time ROW DUMP: hook on video slot 57
+     (0x822E0C90) dumps the menu object (0xB8 bytes), the row array, and for each row its
+     class name (read from the .rdata name record right before its vtable), vtable, state,
+     value, first 0x80 bytes, and the class of every object pointer inside it. Guest reads are
+     guarded with VirtualQuery. Build14 clean. Game launched (log rowdump.log); waiting for
+     the user to open Options -> Video.
+[58] 2026-10-25  ROW DUMP RESULT (rowdump.log, user opened Options -> Video):
+       video menu object 0x41A1B4C4, rows array 0x41E988E0, count 2, CAPACITY 3 (+0x88).
+       row 0 (Gamma slider): obj 0x41A0FA64, vtable 0x820787D0 (class name lookup failed),
+            state 2 (highlighted), +0x2C -> CFlashHotSpot, +0x30 -> CKLocTextAccessor,
+            +0x50..+0x5C four pointers (slider parts?), colour words FFC73BD2/FFC73BD4.
+       row 1 (Back): obj 0x41A0D2E4, class CKInterfaceButton, vtable 0x82078720,
+            +0x08 = 0x08000000, +0x0C = back-pointer to the menu, +0x10 = 0.5f,
+            +0x2C -> CFlashHotSpot, +0x34/+0x3C more pointers, floats 1.0/7.0/10.0 ...
+       Menu object: +0x08 manager 0x400F6230, +0x0C 0x41AB10F4, +0x10 0x41E988A0,
+            +0x84/+0x88/+0x8C = {rows, 3, 2}, +0x98/+0xA0/+0xB4 heap pointers.
+[59] 2026-10-25  *** THE MENUS ARE FLASH-DRIVEN *** Every row points at a CFlashHotSpot.
+     Strings in the image: CKFlashManager ("Flash Manager"), CKFlashUI, CKFlashAnimation,
+     CKFlashText, CKFlashMessageIn / CKFlashMessageOut, CKFlashPlaySoundEvent,
+     CKFlashStartEventEvent, CKFlashNode2dFx, CKFlashFxData, CKFlashUICinematicBloc,
+     CFlashMessageBox2d, CSGHotSpot. No Scaleform/GFx player strings -> an in-house (or
+     Virtools-integrated) Flash player. So menu visuals/layout live in SWF movies (inside the
+     packed .KXE data); code-side rows bind to hotspots (buttons) in the movie.
+     CONSEQUENCE for the Recomp row: a native row needs a button in the movie. Options:
+       (1) the video menu's movie already has a spare/hidden button (options menus may share a
+           template: Sound has 4 rows, Video uses 2, row array capacity is 3),
+       (2) clone the Back button clip in the movie at runtime (if the player supports it),
+       (3) add a button to the SWF itself (needs the movie extracted + a way to load ours).
+[60] 2026-10-25  spyro_hooks.cpp extended (build15): DumpObject() dumps each row's hotspot
+     (+0x2C, 2 levels deep), text accessor (+0x30), +0x34 object, and menu +0x0C/+0x10/+0x98/
+     +0xA0/+0xB4 objects, printing pointed-to class names and strings (to find button
+     instance names). ScanGuestForSwf() runs once on a background thread when the video
+     menu is first live: scans all committed guest memory for "FWS"/"CWS" headers (version
+     4-12, plausible length) and writes each movie to project\run\swf_dump\
+     {F|C}_<guestaddr>_v<ver>_<len>.swf. Game launched (rowdump2.log); waiting for user.
+[61] 2026-10-25  rowdump2.log RESULTS:
+     - SWF SCAN: 0 movies in all committed guest memory while the video menu was open.
+       => the "Flash" UIs are NOT kept as SWF; they are in the game's own compiled format,
+       drawn by CKFlashUI. Editing a .swf is not an available route.
+     - CFlashHotSpot = 0x40-byte record, vtable 0x8206A398:
+         {vt, ptrA, 1, 0, ptrB, id, id, ptrC, 0x01000000, CKFlashUI*, 0,0,0, 1.0f, 1.0f, -1}
+       Hotspots sit contiguously: Back 0x41ABD844 (id 2, UI 0x41AB10F4), Gamma 0x41ABD884
+       (id 6, UI 0x41AB10F4), then 0x41ABD8C4 (id 5, UI 0x41AB1330 = another Flash UI).
+       No plain strings found inside hotspots (names may be wide strings or ids).
+     - Video menu's Flash UI = 0x41AB10F4 (also menu+0x0C), class CKFlashUI, vtable 0x8206A258.
+       Other UIs seen: 0x41AB1330, 0x41AB0804.
+     - Menu <-> UI events are NAMED messages: "onMenu_OpeningAnimEnd",
+       "onMenu_ClosingAnimEnd", "Btn_Close_Interface", "BtnInGame_Show_Boss",
+       "BtnInGame_Hide_Boss" (in records at menu+0x98/+0xA0/+0xB4, each {?, char*, ?, UI*}).
+     - Labels: CKLocTextAccessor -> CKStdText (localized) with CKLocSpeaker; CLocManager ->
+       CKTrcText.
+     ASSESSMENT: a fully native-looking extra row needs a new element in a CKFlashUI movie,
+     i.e. reverse-engineering their custom Flash UI format/player (unknown, possibly large).
+     The NAVIGATION side is understood and hookable (row list + slot 57).
+[62] 2026-10-25  USER DECISION: GO FULLY NATIVE - reverse-engineer the Flash UI format so the
+     Recomp row is drawn by the game itself, "however long it takes". (Hybrid declined.)
+[63] 2026-10-25  *** CORRECTION: THE ENGINE IS NOT VIRTOOLS *** (entry 47 was wrong.) None of
+     Virtools' core classes exist (CKContext, CKBehavior, CK3dEntity, CK2dEntity, CKStateChunk,
+     CKBeObject, CKRenderContext, no "Virtools"/"3DVIA"/"Dassault"). "CK" is simply the prefix
+     of Etranges Libellules' IN-HOUSE engine. The image contains the credits text "Sierra
+     Entertainment, Inc." / "Etranges Libellules" / French "Dans ce troisieme chapitre..." at
+     ~0x82841060 -> DEVELOPER CONFIRMED: Etranges Libellules (overview updated).
+     Also NOT a Flash player: no SWF tag names (PlaceObject, DefineSprite, EditText...), no
+     "FWS"/"CWS"/"SWF" bytes anywhere, no code comparing bytes to F/C,W,S. The "Flash" UI is a
+     custom 2D runtime with its own compiled format.
+[64] 2026-10-25  GHIDRA PROJECT REPAIRED (important for ALL decompiles): auto-analysis treated
+     the register save/restore helpers (0x8262E400-0x8262E800; prologues are
+     `mflr r12 ; bl __savegprlr_N`) as no-return, so 1,788 functions were truncated (e.g.
+     shown as 8 bytes). project\analysis\ghidra_scripts\FixSaveRestHelpers.java fixed it
+     (7,810 helper calls, resumed disassembly at 1,707 sites, 1,788 bodies changed) and the
+     project was SAVED. DecompileFuncs.java also rebuilds any <=12-byte function before
+     decompiling. Decompiles made BEFORE this fix (menu_decomp.c, video_menu_decomp.c,
+     menu_base_decomp.c, flashui_decomp*.c) may be missing code; re-run if relied on.
+[65] 2026-10-25  CKFlashUI DECODED (flashui_decomp*.c):
+       class record: name "CKFlashUI" at 0x8206A24C, vtable 0x8206A258 (24 slots), object
+       size 0x23C; registration Function_826C1C90 -> Function_8213BD40(.., create=0x8211D3D8,
+       arraycreate=0x8211D420, ..). ctor 0x8211D580, dtor 0x8211D650/0x8211D4B8.
+       +0x34 embedded hash table (vtable 0x8206A2A4, 37 buckets at +0x40, FUN_821DA918 =
+            bucket index = key % 37) -> name/id lookup.
+       SLOT 10 = 0x8211D800 = LOAD(stream, mode). Reads, in order:
+         u32 countA -> +0x1C, then countA refs -> array at +0x04
+         u32 countB -> +0x20, refs -> +0x08   (CHILD ELEMENT LIST; looped by init/draw)
+         u32 countC -> +0x24, refs -> +0x0C
+         u32 countD -> +0x28, refs -> +0x10
+         u32 countE -> +0x2C, refs -> +0x14
+         ref -> +0xF0 ; u32 flags -> +0x44 (bit 0x20 cleared)
+         u32 countF -> +0x30, refs -> +0x18
+         40 x u32 -> +0x48..+0xE7 (slot->id table, reset to -1)
+         u32 -> +0xE8 ; ref -> +0x218
+         MOVIE: Function_823D1EA8(stream+4, 0x1B1, ..) finds a resource of TYPE 0x1B1; if
+                found, player = func_0x823A6CC0(0, stream+4) -> stored at +0xEC.
+         u32 -> +0x22C ; ref -> +0x230 ; u32 -> +0x234
+       Stream helpers: Function_820B5750(stream, dst, nWords) reads u32s; stream->vt[+0x10]
+       = raw Read(buf,len); stream->+0x10 sub-reader ->vt[+0x24] reads a ref list,
+       ->vt[+0x20] reads one ref. Allocation Function_821D6010.
+       SLOT 11 = 0x8211DC78 = INIT: Function_8211E888(); Function_8211ED68(this); if +0x22C,
+            Function_82121760(child) for each +0x08 child; player->+0x28 = callback
+            0x8211D058; Function_8211DD28(this) (layout: computes scale/aspect from the
+            player's +0x50/+0x54 (movie width/height) and screen, writes the player root
+            transform at player->+0x24, then Function_82121630 + FUN_82121900 per child);
+            Function_823A31D8(player->+0x24); Function_823A7288(player, 0x8211E760, &1).
+       SLOT 3 = 0x8211D6B8 = RESET/UNLOAD (frees the 6 arrays, clears hash, -1s the table,
+            Function_823A6968(player) + release via DAT_828379A8 vt+0x11C).
+     => The menu's VISUALS are a type-0x1B1 compiled movie run by a separate 2D "player"
+        library at ~0x8239xxxx-0x823Dxxxx (create 0x823A6CC0, destroy 0x823A6968, iterate
+        0x823A7288, 0x823A31D8, transforms 0x823D1770/0x823D19D8). CKFlashUI just binds menu
+        logic to the movie's elements. NEXT: decode the player's node model.
+[66] 2026-10-25  PLAYER / MOVIE MODEL (player_decomp.c, player_decomp2.c, after the Ghidra fix):
+     Player create 0x823A6CC0(?, stream): alloc via global runtime iface DAT_828379A8
+       (+0x118 alloc(pool,typetag) with tag 0x301B1, +0x11C free, +0xE8 strcmp); reads u32
+       (version?), 16-byte rect -> +0x48 (+0x50 width, +0x54 height), Function_823A8168
+       (dictionary), u32 n; if n>0 expects chunk 0x1A5 -> Function_823A3138 -> DISPLAY TREE
+       root at +0x24 (pool tag 0x301A3); Function_823A8820; more arrays (tag 0x301A9);
+       func 0x823A62B0, Function_823A6F60. Chunked stream: Function_823D1EA8(stream, type)
+       finds a chunk by type id (0x1B1 movie, 0x1A5 tree); Function_823D2278(stream,dst,len)
+       raw read.
+     DICTIONARY player+0x0C -> {base,count}, 16-byte entries {kind, nameIndex, a, b};
+       names in STRING POOL player+0x1C -> {base,?,?,stride} (plain char*, compared with
+       iface+0xE8). Lookup Function_823A8258(player, kind, name, &index). CKFlashUI uses
+       kind 1 (display nodes; index -> node table), 6 and 3.
+     NODE TABLE player+0x08 -> {base,count,?,stride=0x3C}; node i = base + 4 + i*0x3C;
+       Function_823A7288(player, cb, ctx) iterates it (cb(player,node,node+0x1C,ctx)).
+     DISPLAY TREE node: u32 type at +0 (1 = container -> recurse; 3 = leaf with extra at
+       +0xC0), flags +0x08 (bit 2 dirty), local 4x4 matrix +0x0C, world 4x4 +0x4C;
+       children: descriptor +0xAC {base,count}, count +0xB0 (low 24 bits), children INLINE
+       at 0x100-byte stride (Function_823A2F10 traversal). Transform update 0x823A31D8 uses
+       +0xB4/+0xB0 with 8-byte {ptr,..} pairs (other node flavour).
+     CKFlashUI init binding (Function_8211E888 / 8211ED68): list-A elements own arrays of
+       0x114-byte records (name at +0x10) looked up as kind 1; list C kind 6; list D kind 3;
+       elements' keys are inserted into the UI's 37-bucket hash; then the whole tree is
+       walked (Function_8211EB00) to hash every node.
+     TEXT elements (Function_82121630/82121760): text id at +0x40 into the global loc table
+       (DAT_828354F8+0x38, 0x104-byte entries), placeholder from the element name (+0x04)
+       when missing, glyphs built via Function_8239E5C8.
+[67] 2026-10-25  spyro_hooks.cpp: SWF scanner REMOVED (no SWF exists). New DumpFlashUI() runs
+     once when the video menu is live: dumps CKFlashUI lists A-F (class, name at +0x04, first
+     0x48 bytes), the 40-entry slot table, +0xE8/+0x218/+0x22C/+0x230/+0x234, the player
+     header, the FULL DICTIONARY (kind, name, a, b), the node table (<=128 nodes), and the
+     display tree (<=400 nodes, any word that indexes a pooled name is resolved).
+     Log prefix [spyro/flash]. Build16 clean; game launched (flashdump.log); waiting for
+     the user to open Options -> Video.
+[68] 2026-10-25  FLASH DUMP RESULT (flashdump.log) - THE VIDEO MENU'S MOVIE:
+     CKFlashUI 0x41AB10F4:
+       list A: 0
+       list B (display/text bindings, class vtable 0x8206A580, name at +0x04, node ptr array
+              at +0x24 with count +0x2C, text accessor +0x30, colour 0x00FFFFFF at +0x08):
+              B[0] "02_BS_TXT_Retour"  B[1] "01_BD_Gamma"  B[2] "TITRE_Menu_Options_Video"
+              (numeric prefix = row order; BS/BD likely button/slider; TXT text; TITRE title)
+       list C (kind-6 events): onMenu_OpeningAnimEnd, onMenu_ClosingAnimEnd
+       list D (kind-3 label): Btn_Close_Interface
+       list E: the CKS08MenuOptionVideo360 object + the menu manager 0x400F6230
+       list F: 3 CFlashHotSpot: F[0]->title elem (id 2), F[1]->Retour elem (id 2),
+              F[2]->Gamma elem (id 6). Hotspot +0x1C = the list-B element it belongs to.
+       +0x230 = 0x419E2744, +0x234 = 1, slot table all -1.
+     PLAYER 0x41F8448C: rect 800 x 600 (+0x50/+0x54 = 0x44480000/0x44160000);
+       player+0x28 = callback 0x8211D058. DICTIONARY 7 entries (kind, name):
+       6 onSnd_OpenMenu, 3 Start_Interface, 3 Btn_Close_Interface, 6 onMenu_OpeningAnimEnd,
+       2 close (a=9), 6 onMenu_ClosingAnimEnd, 1 "" . STRING POOL IS BYTE-OFFSET ADDRESSED
+       (stride 1; names at offsets 0,15,31,51,73,79,101) - the "pool" lines my dumper printed
+       for tree-node words are NOISE (small ints landing mid-string); ignore them.
+       Node table: 1 entry (-> root 0x40051FC0).
+     DISPLAY TREE (0x100-byte nodes; +0x00 type, +0x04 id, +0x08 flags, matrix from +0x0C
+       with 2D translation at +0x3C/+0x40 local and +0x7C/+0x80 world; root local scale
+       1/600 = normalises the 800x600 movie):
+       root 0x40051FC0 type 1 id 0x29A, 5 children INLINE at 0x41F9EF30 + i*0x100:
+         id 3    type 1 container, 0 children, at (106.85, -622.0)   [background?]
+         id 5    type 4 TEXT at (193.2, -534.05)  font size 10.0     [title]
+         id 6    type 4 TEXT at (402.6, -311.45)  y-scale 0.905      [Gamma]
+         id 7    type 4 TEXT at (402.25, 81.7)    font size 8.0      [Retour/Back]
+         id -666 type 1 container, flags 0, 0 children               [hidden]
+       Text node tail (+0xAC..): ptrs (glyph/text buffers), capacity 0xA8/0x98, size float,
+       font object 0x40050648 (shared), 0.8f ...
+[69] 2026-10-25  TREE READER (tree_decomp.c): Function_823A1C38(node, stream) reads a 0x2C
+     header as 11 LITTLE-ENDIAN u32 (code byte-swaps -> data authored on PC): [1] type,
+     [2] id, [3..10] colour transform (mul 1,1,1,1 add 0,0,0,0 -> +0x8C..+0xA8); then chunk
+     type 0xD = matrix (Function_823D3998 -> +0x0C); flags = 6. Function_823A2FE0(node,
+     stream): u32 child count, Function_823A2930/823A2BB8 allocate, children read via
+     traversal callback 0x823A2F88, then the +0xB4 pair list is pointed at the INLINE
+     children (stride 0x100). Root init Function_823A1B30 (type 1, id 0x29A, flags 6).
+     => adding a sibling after load would REALLOCATE the inline array and invalidate every
+        pointer to existing nodes. SAFER: give an EMPTY container (id 3 or -666) its first
+        child, or inject the node while the tree is being read.
+     TEXT SETTER: Function_823A20D8(textNode, u16* zero-terminated UTF-16, big-endian in
+       guest memory). Labels are produced by Function_82121630: text accessor -> FUN_820C3970
+       (localized string -> UTF-16), else placeholder sprintf from the element name.
+[70] 2026-10-25  FIRST VISIBLE EXPERIMENT (build17): in the video slot-57 hook,
+     RunLabelExperiment(): on menu open -> screenshot "video_before" (+0.8 s); after 1.5 s
+     -> find root child id 7 (Back text) and call the game's setter sub_823A20D8 with
+     u"Recomp Settings" (GuestSetNodeText: UTF-16BE written to guest stack 0x2000 below r1,
+     r1 lowered past it, full PPCContext saved/restored around the call); then screenshots
+     at +0.5 s and +3 s (to see if the menu rewrites the label). ScreenshotLater() captures
+     the game window client area from INSIDE the game process (GDI BitBlt, works because the
+     game window is in front while the user is in the menu) -> project\run\shots\*.bmp.
+     Game launched (labelexp.log). Waiting for the user.
+[71] 2026-10-25  EXPERIMENT 1 RESULT: NOTHING VISIBLE CHANGED (user confirmed; screenshots
+     video_before / after_0.5s / after_3s identical). The hook DID run: found back-text node
+     0x41F9F230 (id 7) and called sub_823A20D8 without crashing. Screen layout of the video
+     menu (screenshot, 2880x1620 window): title "Display Options" in the top banner, a
+     highlighted row "Gamma  < 7 >" in the middle, and "(B) Return" at the BOTTOM-LEFT.
+     => "(B) Return" is likely the shared button-prompt UI, NOT node 7 (node 7 is at x~402,
+        the same column as Gamma). Node 7 may be the gamma VALUE or not on screen at all; or
+        the binding rewrites text every frame.
+     SCREENSHOT TOOLING WORKS: ScreenshotLater() inside the game produced 2880x1620 BMPs;
+     convert to PNG with System.Drawing (scratchpad) to view.
+     EXPERIMENT 2 (build18): logs every list-B binding's node pointers/ids and text id (+0x40),
+     and world/local positions of root children 3/5/6/7/-666; phase 1 (+1.5 s) sets "N5"/"N6"/
+     "N7" once + dirty flag (|=2); phase 2 (+3 s onward) re-sets them every frame; screenshots
+     e2_before / e2_phase1 / e2_phase2. Game launched (labelexp2.log). Waiting for user.
+[72] 2026-10-25  EXPERIMENT 2 RESULT: no markers visible in either phase (once or every frame).
+     BINDINGS (corrects entries 68/70): "02_BS_TXT_Retour" -> node id 5 (local 193.2,-534.05)
+     = the "(B) Return" prompt at BOTTOM-LEFT; "01_BD_Gamma" -> node id 6 (402.6,-311.45);
+     "TITRE_Menu_Options_Video" -> node id 7 (402.25, 81.7) = TITLE "Display Options".
+     Movie Y AXIS POINTS UP (title +82, Gamma -311, Return -534). Experiment 1 had changed
+     the TITLE node, not Return. Binding text id (+0x40) = 0 for all three. Node 3 world
+     (0.40,-0.037) = it is scaled/parented differently. Background is an animated video
+     (screenshots differ in colour only).
+     TEXT CODE: Function_823A20D8(node, str) = copy string into node-owned buffer +0xAC
+     (capacity +0xB4, realloc via iface+0x108 tag 0x301A7). Only two callers:
+     Function_82121630 (labels from loc text) and Function_82121530 (binding-class vtable
+     slot 11 @ 0x8206A5AC: runtime SetText: wcscmp then 823A20D8 on each node then
+     FUN_82121900). FUN_82121900 sets node +0xC4 scale (= elem+0x38 * ui+0x200/ui+0x208)
+     and +0xC0 colour (= elem+0x3C).
+     TEXT NODE DRAW = Function_823A21F0 (only caller Function_823A1E28): every frame, if
+     (flags & 0x1000004) == 4 (visible bit 4, no "no-font" bit 0x1000000): rebuild world
+     matrix if dirty (flags & 2), skip if text == " ", else draws node+0xAC with font
+     (node+0xBC)->+4 via Function_8239DF78, colour from +0x8C..+0xA8, size +0xB8, scale +0xC4;
+     +0xB0 is a render-state object (not a glyph cache). Text width: 16-bit when
+     ((font->+4)+0x10 & 2), else 8-bit. Function_823A2068 = text node free.
+     => Text IS read every frame, so either the visible labels are NOT these nodes (another
+        UI/player instance draws them) or my UTF-16 string was wrong for an 8-bit font.
+     Tools added: project\analysis\find_field_users.py (functions loading given struct
+     offsets), ghidra_scripts\FindCallers.java (callers of an address).
+     EXPERIMENT 3 (build19): logs each text node's current text (UTF-16 and ASCII decode, raw
+     bytes), capacity, font and 8/16-bit flag; phase 1 HIDES the title node (flags &= ~4);
+     phase 2 restores it and MOVES the Gamma label +100 x (dirty); phase 3 sets Return's text
+     and reads it back. Screenshots e3_*. Game launched (labelexp3.log). Waiting for user.
+[73] 2026-10-25  *** EXPERIMENT 3: FIRST NATIVE VISUAL CONTROL - WORKS ***
+     - Hiding node 7 (flags &= ~4) made the ENTIRE title banner vanish (ornate frame + "Display
+       Options"). Restoring the bit brought it back.
+     - Moving node 6 (+100 local x, flags |= 2 dirty) shifted the WHOLE Gamma row (label,
+       arrows, value "7", glow highlight) ~90 px right. USER CONFIRMED: "it jumped sideways".
+     - Setting node 5's text to "Recomp Settings" stored correctly (read-back UTF-16 OK,
+       font is 16-bit, flags 0x2 on font->+4->+0x10) but changed NOTHING on screen.
+     - All three nodes' text was a single space U+0020 (followed by leftovers of the binding
+       names "S_TXT_Retour", "D_Gamma", "E_Menu_Options_Video" = names were placeholders
+       first, then blanked). The text draw (823A21F0) SKIPS a " " string.
+     => THE MOVIE NODES ARE ANCHORS, NOT LABELS. Each row/title WIDGET draws itself (label
+        text from the loc system, arrows, value, highlight) at its anchor node's world
+        position and only when the anchor is visible. Node 5 = anchor of the "(B) Return"
+        prompt (CKInterfaceButton row), node 6 = anchor of the Gamma slider row, node 7 =
+        anchor of the title banner.
+     => A NATIVE ROW NEEDS: (1) an anchor node (a node the player keeps updated, or possibly
+        a standalone 0x100-byte node we maintain), (2) a widget like CKInterfaceButton that
+        draws "Recomp Settings", (3) binding + hotspot linking them, (4) a row entry.
+     NEXT: decode CKInterfaceButton (vtable 0x82078720): how it reads its anchor and where its
+     label text comes from (CKLocTextAccessor -> CKStdText / loc table).
+[74] 2026-10-25  ROW WIDGET CLASSES (button_decomp.c):
+     CKInterfaceButton: vtable 0x82078720 (35 slots; preceded by French state names "Coche
+       Selection", "...ion bloque"). Gamma row = CKInterfaceButtonDouble, vtable 0x820787D0
+       (left/right arrows). Slot 21 (+0x54) Update(dt), slot 22 (+0x58) OnEvent(e) ->
+       Function_822C51B8(this, state 0..4), slot 23 (+0x5C) SetPosition(x,y), slot 10 Load,
+       slot 19 0x822C4B60 Activate/Init, slot 20 0x822C4C88 Deactivate, slot 8 0x822C4930.
+     Layout: +0x2C hotspot, +0x34 main visual piece, +0x38/+0x3C/+0x40 three more pieces,
+       five 0xA0-byte STATE RECORDS at +0x110..+0x3AF (normal/highlight/pressed/disabled/
+       checked: colours, scales, per-state anim track ptrs), +0x3B0 sound dictionary
+       (CKSoundDictionaryID, vtable 0x8206BDA0), +0x3B4 byte, +0x3BC u32. Update animates
+       scale/alpha per state and positions each piece via piece->+0x28 sub-object vt+0x2C.
+     CFlashHotSpot IS A PIECE LIST: +0x10 -> array of 16-byte entries {piece, x-offset,
+       y-offset, flags 0x00010101}, COUNT at +0x18 (the "2"/"6" I had called ids).
+       SetPosition writes x/y into the entries; offsets are relative to the anchor node.
+[75] 2026-10-25  SELF-DRIVEN DUMP WORKS (no user needed): the video menu's rows EXIST AT BOOT.
+     spyro_hooks.cpp now also hooks the video menu array ctor (0x822E0AD8, records the
+     object) and Menu::Update (0x822C11E0); 25 s after boot it dumps the video menu's rows,
+     state records, pieces and hotspot entries once (log prefix [spyro/rows]). Run it with
+     run-game.ps1 -Seconds 45 and read the log - no menu visit required. (Note: the video
+     menu's slot-57 hook also fired without the user opening the menu, so the earlier label
+     experiment code ran too.)
+     RESULTS (rowwidgets.log):
+       PIECE CLASS CText2d = vtable 0x8206A0F0 (name at 0x8206A0E4). Text stored INLINE as
+         UTF-16 at +0x3C. +0x04 flags 0x01000101, +0x08 0x41A29AD4 (shared), +0x14/+0x18
+         normalised position, +0x20/+0x24 scale 1,1, +0x28 sub-object (vt 0x8206A178,
+         transform/anim), +0x2C 0x400F5FA0 = CLocManager, +0x30/+0x34 size floats.
+         Gamma row: +0x34 = CText2d "Gamma" (0x41A96F24), +0x40 = CText2d "6" (value).
+         Back row: +0x34 = CText2d holding U+E822 = the (B) BUTTON GLYPH.
+       PIECE CLASS at vtable 0x82069A78 = most likely CBillboard2d (name at 0x82069A14; nearby
+         texture-name prefixes "Hint_", "out_", "hud_", "ico_") = textured 2D sprite.
+         Back row +0x3C is one -> the word "Return" is probably a LOCALISED TEXTURE, not text.
+         Gamma row has 4 of them (glow + arrows) + 2 CText2d.
+       Hotspot entries: Gamma {4 billboards with x-offsets 0, 0, 0.215, 0.085; "Gamma" text
+         -0.29; value 0.15}; Back {billboard, B-glyph text}.
+       Back row +0x3B0 = CKSoundDictionaryID (per-state sounds).
+     PLAN FOR THE NATIVE ROW: a CKInterfaceButton whose label is a CText2d styled like
+     "Gamma" (gold menu font) containing "Recomp Settings", plus the highlight glow
+     billboard, anchored to its own anchor node, linked via a new hotspot (+ binding),
+     appended to the video menu's row array (capacity 3, count 2 -> 3), handled in our
+     video slot-57 override. NEED: object sizes / constructors for CKInterfaceButton,
+     CText2d, CBillboard2d, binding element (vtable 0x8206A580), CFlashHotSpot (0x40), and a
+     guest allocator call (operator new = 0x8260DC40) from a hook.
+[76] 2026-10-25  User: "sounds good. you may continue". CLASS SIZES / CTORS (ctors_decomp.c,
+     found via refs to each vtable):
+       CText2d            size 0x748; scalar/vector deleting dtor 0x82119078; sub-object at
+                          +0x28 (vtable 0x8206A178 -> 0x82069D40 = TEXT LAYOUT) runs to the end:
+                          inline UTF-16 at +0x3C (layout+0x14), per-glyph arrays 0x3C x 8 bytes
+                          at +0x450 and 0x3C bytes at +0x6A8; +0x73C/+0x740/+0x744 refs;
+                          +0x06/+0x07 = horizontal/vertical alignment; +0x14 pos, +0x20 scale.
+       CBillboard2d(?)    size 0x84, dtor 0x82112B10, sub-object at +0x28 (vt 0x82069B00/0x82069A28).
+       binding element    size 0x44, create 0x82121108 = new(0x44) {vt 0x8206A580, +0x24 node
+                          array, +0x28 = 2, +0x2C count}; dtor 0x82121300 frees +0x24 array.
+       CFlashHotSpot      size 0x40, create 0x8211F828 = new(0x40) {vt 0x8206A398, +0x04 array,
+                          +0x08 = 2, +0x10 entries array, +0x14 = 2, +0x18 count}; dtor
+                          0x8211F778 frees +0x10 and +0x04 (arrays allocated with a 4-byte
+                          count header: free(ptr - 4)).
+       CKInterfaceButton  ctor (init only) 0x822C46C0, dtor 0x822C4890 (5 state records from
+                          +0x3B0 back, 0xA0 each).
+     CText2d methods (text2d_decomp.c): slot 10 Load (base 0x8211AAA8, layout load 0x8211ADA0,
+       refs +0x740/+0x744), 24 sync-text-to-+0x740 (calls target layout vt+0x38 with this+0x3C),
+       29 prepare-rect (0x8211C778: box from layout width +0x08 / height +0x0C and alignment),
+       31 scale, 32 DRAW (0x8211C868 with layout, pos, scale, size +0x1C, alignment).
+     *** REAL SetText: Function_8211B368(layout = text2d + 0x28, u16* UTF-16BE) *** (layout vt
+       slot 14 = 0x8211B2A8 wraps it): copies string to layout+0x14 (<=399 chars, else writes
+       "TEXT TOO BIG"), then 0x8211B820 (parse - splits words, NULs at spaces), 0x8211BC50
+       (glyphs), 0x8211BF98 (measure), 0x8211C170 (layout) or vt[0].
+[77] 2026-10-25  TEST 4 (build21): spyro_hooks.cpp cleaned up - the old label experiment and
+     Flash dump are no longer called; the video slot-57 hook now only takes one screenshot
+     ("video_menu", +1.2 s) per menu opening. Menu::Update hook, 25 s after boot, dumps the
+     rows and then calls sub_8211B368(gammaLabel + 0x28, u"Gamma (Recomp test)") on the
+     Gamma row's CText2d (row0 +0x34 = 0x41A96F24) via GuestCallWithString().
+     SELF-RUN (test4self.log): no crash, game alive; the label's buffer now reads
+     "Gamma\0(Recomp\0test)\0" and the layout word count (+0x38 of piece) went 0 -> 2 = the
+     game's parser processed our string. Visual confirmation needs the user to open the menu.
+[78] 2026-10-25  TEST 4 RESULT: label still showed "Gamma" (user). Text was set at boot+25 s,
+     user opened the menu ~40 s later. Either opening the menu reloads the label (loc text,
+     CText2d +0x2C CLocManager / +0x73C ref) or the visible label is another object.
+     TEST 5 (build22): video slot-57 hook, per menu opening: screenshot t5_open (+1.0 s), dump
+     the Gamma label piece at +0.8 s (t5.label-at-open), re-apply sub_8211B368(label+0x28,
+     "Gamma (Recomp test)") at +1.5 s, screenshot t5_after_reapply (+0.7 s later).
+     Game launched (test5.log). Waiting for user.
+[79] 2026-10-25  *** TEST 5: NATIVE TEXT CHANGE VISIBLE *** User: "The Gamma label changed to
+     Gamma (Recomp test) after a moment." Log: at menu open the label buffer STILL held our
+     boot-time text (not overwritten), yet "Gamma" was drawn until we set it again while the
+     menu was active. RULE: set CText2d text (sub_8211B368) only while its menu is ACTIVE -
+     glyphs built while inactive don't render correctly.
+     CCloneManager (vtable 0x820698D8, methods ~0x8210E8F8..) = 3D MESH INSTANCING manager
+     (0xF8-byte instance records), NOT a generic object cloner - dead end for UI copies.
+     PIECE DRAW LIST (links.log, self-run): every piece (CText2d / billboard) belongs to a
+     CScene2d (vtable 0x8206A070, name at 0x8206A060). Piece +0x08 = scene, +0x0C = PREV,
+     +0x10 = NEXT. Scene object (0x28 bytes): +0x18 head, +0x1C tail, +0x20 count, +0x24 flag;
+     scenes are stored contiguously (the one at 0x41A29AD4 has 709 pieces = all menu 2D).
+     CScene2d slot 8 (0x82118728) walks head ->+0x10 calling piece vt+0x20; Load (0x821187E0)
+     reads head/tail refs, count, flag. Piece BASE Load 0x8211AAA8 reads bytes +4..+7 (flags,
+     flags, h-align, v-align), refs +0x08 scene / +0x0C / +0x10, floats +0x14 (x,y) and +0x1C;
+     base reset 0x8211AA78. Registrations: CText2d 0x826C1BA0 -> create 0x82118F98 =
+     new(0x748)+ctor 0x82118EC0; CBillboard2d 0x826C18A0 -> create 0x82112A30 =
+     new(0x84)+ctor 0x82112970; CKInterfaceButton 0x826C9160 -> create 0x822C4548 =
+     new(0x3C0)+ctor 0x822C46C0. CText2d and billboard own NO heap memory (byte copy safe).
+     CKInterfaceButton state-record dtor 0x822C47D0 FREES five arrays per record (+0x64,
+     +0x70, +0x7C, +0x88, +0x94; free(ptr-4)) -> a byte copy shares them.
+[80] 2026-10-25  *** NATIVE RECOMP ROW BUILT (build25) *** spyro_hooks.cpp "RecompRow":
+     at boot, from any menu's Update (hook 0x822C11E0) once the video menu has 2 rows:
+       - allocates via the game's operator new sub_8260DC40 (GuestCall helper: fresh stack
+         area 0x400 below r1, registers restored) a label (0x748), hotspot (0x40), hotspot
+         entry array (0x10), row (0x3C0);
+       - label = byte copy of the Gamma label, +0x740/+0x744 cleared, INSERTED after the
+         Gamma label in its CScene2d list (prev/next fixed, tail if last, count+1);
+       - hotspot = copy of Back's hotspot with +0x04/+0x0C cleared and a 1-entry list
+         {label, 0, 0, 0x00010101} (+0x10 entries, +0x14 cap 1, +0x18 count 1);
+       - row = copy of Back's CKInterfaceButton, +0x2C hotspot, +0x34 label, +0x38/+0x3C/+0x40 0;
+       - appended as rows[2], video menu row count 2 -> 3.
+     Per frame (video menu's Update): label +0x14/+0x18 = Gamma label pos + (0, 0.085).
+     Video slot-57 hook: sets the label text "Recomp Settings" whenever the label's flags byte
+     (+5, 0x02 = active) changes, logs row-2 state changes and "*** Recomp Settings PRESSED ***"
+     on (row 2, state 4, phase 1). Video menu dtor hook (0x822E0BE0) sets count back to 2 first.
+     SELF-RUN (recomprow_self2.log): "row built: row 0x41FE46B0 label 0x41FE5780 hotspot
+     0x41FE42D0 scene 0x41A29AD4 (scene count now 710)", no crash after 40 s. NOT YET SEEN
+     by the user. (First attempt built nothing: the build waited for the video menu's own
+     Update, which only runs while it is open.)
+[81] 2026-10-25  *** USER SAW THE NATIVE ROW *** Screenshot recomp_row: "Recomp Settings" drawn
+     in the game's own gold menu font. Problems reported: (a) it sat ABOVE Gamma (menu
+     normalised Y grows UPWARD, my +0.085 was wrong), (b) "it eventually changes its name to
+     gamma", (c) "i try to select it, it turns gold for one second and doesn't let me". Log:
+     our row's state never left 0 (the menu never selected it).
+     CAUSE (b): CText2d text SOURCE = +0x73C = CKLocTextAccessor (vtable 0x82065638, 0x14-byte
+       records {vt, ?, 0xA, 0, CKStdText*}). Layout rebuild Function_8211B4D8: text =
+       (layout+0x714 = text2d+0x73C)->+0x10->+0x18 (UTF-16); returns early if +0x10 == 0.
+       Our byte copy shared Gamma's accessor -> rebuild wrote "Gamma". WARNING: the game's
+       SetText wrapper 0x8211B2A8 (layout vt slot 14) CLEARS the source's +0x10 after setting
+       text - calling it on a shared source would blank Gamma's real label. Use 0x8211B368.
+       Callers of 8211B368: 8211B2A8 and inside Function_8211B0B0 (layout vt slot 11 =
+       per-frame event handler: case 0 font/size, 1 layout, 2/3 ids, 5 -> 8211B4D8 rebuild).
+       CText2d slot 24 (0x82119498) = sync/activate: if no +0x740/+0x744 -> rebuild.
+     CAUSE (c): NAVIGATION. Row vt+0x78 = 0x8211A100 returns byte row+4+dir: bytes +4..+7 are
+       the row's NEIGHBOUR row index for direction 0..3. Gamma = FF FF FF FF (none), Back =
+       00 00 00 00 (all -> Gamma). Our Back copy had 0 everywhere and nothing pointed to us.
+       Back's +0x3B4 shortcut byte is FF (not a shortcut row). Menu: selected row byte +0x6C,
+       confirm logic 0x822C16E8 (row flags +0x08 bit 2 = disabled), navigation 0x822C1A98
+       (+0x81/+0x82 mode -> pointer hit-test 0x822C26E0 by row bounding boxes, else
+       neighbour lookup), shortcut-button activation 0x822C1428 (row +0x3B4), input ->
+       direction 0x822C2DC0 (input map "Flash Manager"; action groups 2,3,0,1 -> dir 0,1,2,3;
+       which is up/down UNVERIFIED).
+     FIXES (build27): our label gets its OWN accessor (0x14-byte copy of Gamma's with +0x04
+       and +0x10 = 0); Gamma's neighbour for dirs 2 and 3 = row 2 (assumed up/down; 0/1 left
+       untouched for the slider); our row's neighbours stay 0 (-> Gamma); dy = -0.085; log of
+       menu selection changes ("menu selection -> row N"). Self-run: builds, no crash.
+[82] 2026-10-25  USER TEST of build27: "recomp settings is below gamma but it won't let me select
+     it and when i back out and go back in, recomp settings turns into the back icon and the
+     word back". Log (recompnav.log): "menu selection -> row 0" only - selection NEVER moved.
+     Gamma's neighbour bytes were set (+0x04 = FFFF0202 -> dirs 2,3 = row 2).
+     NAVIGATION DETAIL (rest of 0x822C1A98): from the selected row (menu +0x6C) it asks
+       row->vt+0x78(dir) for the neighbour, SKIPS rows whose flags byte (+0x08) has bit 0x10,
+       repeats, then Function_822C1BC0(menu, 0, dir, newIndex) changes the selection. Our row's
+       flags byte is 0x28 (not skipped). Menu +0x80..+0x83 = 01 00 00 01 (+0x81 = 0 -> NOT the
+       pointer hit-test mode). => most likely UP/DOWN ARE DIRECTIONS 0/1, not 2/3.
+     LABEL RESET TO "BACK": CKInterfaceButton SetState (0x822C51B8, 1572 bytes) reads the
+       STATE RECORD's text accessor at record+0x04 (Back's 5 records hold accessors
+       0x419DBF70/5C/48/34/20, 0x14 apart) and pushes its string into the +0x34 label through
+       the label layout's vt+0x40 (slot 16, 0x8211CC88). Our row is a byte copy of Back, so
+       on every activation it writes Back's "(B) Back" text into our label.
+     LOC TEXT FORMAT: FUN_820C3970(CKStdText*, out) copies the UTF-16 string at
+       *(CKStdText + 0x18) (if loc enabled: (*(DAT_828354F8+0x94))+0xB0 != 0, else the
+       fallback string at 0x82786FAC). Accessor (0x14 bytes, vt 0x82065638): +0x04 optional
+       indirection (if non-null, CKStdText = **(+0x04)), else +0x10 = CKStdText*.
+     Decompiles: project\analysis\state_decomp.c (SetState, FUN_820C3970, 0x822C1BC0).
+
+=== SESSION PAUSED HERE (user asked for a break, 2026-10-25 ~18:40) - RESUMED, see [83]+ ===
+CURRENT STATE OF THE NATIVE RECOMP ROW (build27, spyro_hooks.cpp "RecompRow"):
+  - Builds at boot, no crashes. Drawn by the game in its own gold font, BELOW Gamma.
+  - NOT selectable yet; text gets replaced by Back's "(B) Back" after re-entering the menu.
+NEXT STEPS (in order):
+  1. TEXT: allocate a fake CKStdText (copy ~0x40 bytes of the original at Gamma accessor's
+     +0x10 -> e.g. 0x412E4204, then +0x18 = pointer to a guest-heap UTF-16BE "Recomp Settings"
+     string), set OUR accessor's +0x10 = that object (+0x04 stays 0), and set +0x04 of all 5
+     of OUR row's state records (row + 0x3B0 - 0xA0*(5-s) + 0x04, s=0..4) = OUR accessor.
+     Then the button's own SetState writes "Recomp Settings" every time and no hook-side
+     SetText is needed (keep it as a fallback).
+  2. NAVIGATION: hook Function_822C2DC0 (input -> direction, returns 0..3 or 0xFF) and log the
+     direction for each press while the video menu is up, to learn which code is up/down
+     instead of guessing. Expected: up/down = 0/1. Then Gamma +4+dir(down) = 2 and our row
+     +4+dir(up) = 0, other directions 0xFF (do NOT touch Gamma's left/right: slider).
+  3. PRESS: confirm "*** Recomp Settings PRESSED ***" appears on A; then build the Recomp
+     settings screen (likely another native menu built the same way).
+  4. Optional polish: highlight glow billboard for our row (Gamma's hotspot entries 0..3 are
+     CBillboard2d glow/arrows), x alignment of the label.
+
+=== SESSION RESUMED (user: "we can go back to fixing this.") ===
+[83] 2026-10-25  build28 (steps 1+2 of the plan above):
+     TEXT: BuildRecompRow now allocates a CKStdText copy (0x40 bytes of Gamma accessor's
+       current text object) with +0x18 -> guest-heap UTF-16BE "Recomp Settings", our accessor
+       (0x14 copy) has +0x04 = 0 and +0x10 = that CKStdText, label +0x73C = our accessor, and
+       all 5 state records of OUR row (row + 0x90 + 0xA0*s + 0x04, s = 0..4) = our accessor.
+     NAVIGATION DIAGNOSTIC: ALL FOUR of Gamma's neighbour bytes (+4..+7) = 2 (our row) for
+       this test only; our row's stay 0 (Gamma). New hook on 0x822C2DC0 (input -> direction)
+       logs "input direction code N (selected row M)" while the video menu is up.
+     Self-run: builds at boot, no crash.
+[84] 2026-10-25  *** ROW IS SELECTABLE AND PRESSABLE *** User: "yup it works. i can press down
+     and it highlights it. just no gold around the text and i can't enter into it yet. could
+     you place the recomp options on top of gamma rather than below?" Name stayed correct
+     after re-entering (CKStdText fix works). Log (recomptext.log):
+       DIRECTION CODES MEASURED: 0 = UP, 1 = DOWN, 2/3 = LEFT/RIGHT. On Gamma, left/right
+       never moved the selection even though linked -> the slider consumes them first.
+       "*** Recomp Settings PRESSED ***" logged on every A press (row 2, state 4, phase 1).
+       Row states seen: 0 normal, 2 highlighted, 4 pressed.
+[85] 2026-10-25  build29: (1) Recomp row ABOVE Gamma: dy = +0.085; navigation final: Gamma
+     up(0) -> row 2, Gamma 1/2/3 = FF; ours down(1) -> row 0, 0/2/3 = FF. (2) HIGHLIGHT GLOW:
+     byte copies of Gamma's two glow CBillboard2d (Double row +0x58 / +0x5C = hotspot entries
+     1/0 at x-offset 0) inserted into the scene BEFORE our label (InsertPieceBefore). Each
+     frame PlaceRecompRow: while Gamma's row state (+0x14) == 2, snapshot both Gamma glow
+     billboards (0x84 bytes); while OUR row state is 2/4 and the menu is shown (label +5
+     bit 0x02), copy snapshot +0x14.. into our glow, position = snapshot pos + (0, dy),
+     flags +4/+5 from snapshot with +5 |= 2; otherwise our glow +5 &= ~2 (hidden).
+     Self-run: glows 0x4000B7D0 / 0x400F5B20, scene count 712, no crash. Awaiting user.
+[86] 2026-10-25  USER: "gold does not show but its on top now". Screenshot (taken while our row
+     was selected) confirms: row above Gamma, NO glow behind it; Gamma's glow correctly gone.
+     Navigation fully correct in the log (up 0 -> row 2, down 1 -> row 0, presses logged).
+     Glow hypotheses: (a) snapshot never taken (Gamma's +0x14 state for the Double class may
+     not read 2), (b) billboard visibility isn't (only) +5 bit 0x02, (c) the copies share a
+     per-billboard render object (+0x2C, different per billboard) with Gamma's.
+     build30: glow diagnostics ([spyro/glow]): Gamma row state changes with full dumps of both
+     Gamma glow billboards, our glow show/hide transitions (+ snapshot flags), and dumps of our
+     glow bytes for the first frames it is shown. Game launched (glowdiag.log).
+[87] 2026-10-25  glowdiag result + user "still no glow". Snapshot WORKS: Gamma's glow animates
+     on highlight (glow1 colour FFF48511 -> FFF485FF gold/opaque, size +0x3C/+0x40 grows to
+     ~0.95 x 0.2; not highlighted: FFFFFF00, 0.5 x 0.08). Our copy carried exactly the gold
+     opaque values with +5 bit 0x02 set and pos (0.502, 0.566) - and still nothing drawn.
+     CBillboard2d layout: +0x04 flags, +0x08 scene, +0x0C/+0x10 links, +0x14/+0x18 pos,
+     +0x1C size arg, +0x20/+0x24 scale, +0x28 inline draw sub-object (vt 0x82069B00): +0x2C
+     and +0x30 pool pointers (texture/material, spaced 0x1C and 0x80 - sharing is fine),
+     +0x34 RGBA colour (last byte = alpha), +0x3C/+0x40 size, +0x4C.. UVs, +0x6C optional
+     "follow visibility of" piece, +0x74/+0x7C/+0x80 sprite-sheet animation.
+     Billboard DRAW = vt slot 32 0x82112DB8: if visible (+5 & 2) -> optional sprite-sheet
+     frame step -> Function_82119B70(size, this+0x28, this+0x14). Slot 21 0x82112FC0 event,
+     29 0x82113480 prepare rect, 31 0x821135C8 scale size.
+     *** KEY: PIECES ARE DRAWN BY THEIR ROW WIDGET, NOT BY THE CScene2d LIST. *** Our label
+     is visible only because it is our button's +0x34 piece; free-standing glow copies are
+     never drawn. FIX (build31): our row +0x38 = glow copy 0, +0x3C = glow copy 1 (Back used
+     +0x3C for its "Return" sprite); look/visibility still driven by PlaceRecompRow.
+     Self-run OK (scene count 712). Relaunched for the user (glowattach.log).
+[88] 2026-10-25  build31 result (user + screenshot): BOTH rows showed a STONE PLATE behind the
+     text (Gamma too, even when not selected). User: the plates are the row backgrounds of the
+     OPTIONS menu shown before Display Options. => the glow copies are now DRAWN (widget
+     ownership was the fix), but the draw sub-object's +0x2C (0x1C-byte) and +0x30 (0x80-byte)
+     records are per-sprite RENDER STATE / image references, not constants: sharing them let
+     our button's per-frame piece scaling (piece+0x28 vt+0x2C) rewrite Gamma's.
+     build32: each glow copy gets its own copies of both records. User: "when gamma is
+     highlighted, glows" (Gamma back to normal) / "when recomp is selected, stone plate".
+[89] 2026-10-25  CAUSE of the remaining plate: our private records were copied AT BOOT, before
+     Display Options had ever opened; the record pool entries still referenced the Options
+     menu's plate images then and are only filled with the glow images when the display menu
+     opens. build33: while Gamma is highlighted, PlaceRecompRow also snapshots Gamma's LIVE
+     +0x2C/+0x30 records (g_rec2c_snapshot / g_rec30_snapshot) and copies them into our own
+     records whenever our glow is shown. Self-run OK; relaunched (glowrec.log).
+[90] 2026-10-25  *** NATIVE RECOMP ROW COMPLETE *** User: "The gold glow shows on Recomp Settings
+     now." The row in Options -> Video is: drawn by the game (own CText2d label, gold menu
+     font), ABOVE Gamma, reachable with UP from Gamma (DOWN returns), keeps its name through
+     menu re-entry (own CKStdText/accessor, all 5 button states point at it), has Gamma's
+     gold highlight glow (two CBillboard2d copies owned by our button at +0x38/+0x3C, private
+     +0x2C/+0x30 render records refreshed from Gamma's live ones), and A registers a press
+     ("*** Recomp Settings PRESSED ***"). Pressing does nothing else yet.
+     build34: removed the [spyro/glow] diagnostics (no behaviour change).
+     RECIPE (reusable for the settings screen): byte-copy a game widget + its pieces with the
+     game's operator new; give copies their own text source (accessor+CKStdText), their own
+     billboard render records, attach every drawn piece to the owning widget (widgets draw
+     their pieces, the CScene2d list does not), set neighbour bytes (+4..+7: up 0, down 1,
+     left 2, right 3), set CText2d text only while the menu is active, detach our row in the
+     menu destructor hook.
+[91] 2026-10-25  USER DECISIONS for the Recomp settings screen (asked via question card):
+       - "Separate new menu" (NOT a page inside Display Options): its own menu screen like
+         Sound/Controls, with the game's open/close transitions; B returns to Display Options.
+       - "All rows from the start": Renderer, FPS, VSync, Display mode, Motion blur,
+         Anti-aliasing, Online co-op - rows without a working backend are visible but do
+         nothing yet.
+     Plan: (1) decode the menu manager's "go to menu" (manager vtable +0x324, called by the
+     Back handlers with ids 0x17 = Options, 0x1A = in-game Options; manager = video menu +0x08
+     = 0x400F6230, vtable 0x82077EF0) and the menu-id -> menu-object mapping; (2) decide the
+     host for the new menu (a cloned menu object + UI, or an existing menu shown in a "recomp
+     mode"); (3) setting rows = clones of the Gamma slider row (CKInterfaceButtonDouble, arrows
+     + value text), values driven by our code.
+[92] 2026-10-25  MENU SWITCHING DECODED (build35/36 diagnostics + Ghidra).
+     Game manager (CKS08GameManager, vt 0x82077EF0) = video menu +0x08 = 0x400F6230.
+       - Request stack: bytes at mgr+0xAD0, count at mgr+0xAD8. "Go to menu X" = count=0;
+         byte[0]=X; count++ (vt+0x324 is the identity function 0x823A6160).
+       - Function_822AC100: if current id (mgr+0xACD) != stack top, saves current to mgr+0xADC
+         and calls Function_820B0E58(mgr+0xAC4, top) = the state switcher.
+       - Switcher at mgr+0xAC4: {owner=mgr, handler table*, count byte 0x25, current id}.
+         Switch = handlers[old](mgr, 2, new); current=new; handlers[new](mgr, 1, old).
+         Handlers are also called EVERY FRAME with phase 0 (other = same id).
+         PHASES: 0 = per frame, 1 = open/enter, 2 = close/exit.
+       - handlers 0x00..0x23 = 0x822ACFC0 (generic), 0x24 = 0x822ACF50 (special).
+         Generic: obj = (mgr->vt[0x364]() = mgr+0x12CC)[id]; obj->vt[0xD4](obj, phase, other).
+       - State-object array mgr+0x12CC (0x25 slots). Notable: 0x0A Objectives, 0x15 StatsLevel,
+         0x17 Options, 0x1A in-game Options, 0x1D OptionSound360, 0x21 OptionVideo360 (THE
+         DISPLAY OPTIONS MENU, object 0x41A1B4C4), 0x23 StartPlayer. EMPTY slots: 0x01,
+         0x0B-0x0E, 0x16, 0x19, 0x1B, 0x1C, 0x1E, 0x1F, 0x22, 0x24.
+       - Video menu Back (slot 57, row 1 pressed) requests 0x1A if mgr+0xAB5 == 6 else 0x17.
+       - Menu state callback (video vt+0xD4 = 0x822C0E18): phase 1 resets rows/selection and
+         asks vt+0xE0 for each row's state; phase 0 runs Menu::Update and, on an end-of-
+         transition event, RE-REQUESTS THE MENU'S OWN ID stored in byte menu+0x90.
+[93] 2026-10-25  SEPARATE "RECOMP SETTINGS" MENU, first version (build37/38).
+     Design: no new menu object. The empty state slot 0x22 is pointed at the video menu object,
+     so requesting 0x22 closes Display Options and re-opens the same object with the game's
+     own transitions. On "open" (phase 1) of 0x22 our hook on 0x822ACFC0 swaps the menu's row
+     list (+0x84/+0x88/+0x8C) to our own {Recomp row, Back} array, fixes the neighbour bytes,
+     selects row 0, and changes the menu's own-id byte (+0x90) 0x21 -> 0x22; opening any other
+     state swaps everything back. The video menu destructor hook also swaps back first.
+     In the Recomp menu: our row sits at Gamma's position and reads "Renderer: reXglue";
+     pressing it cycles reXglue -> Vulkan -> plume (text only, no backend yet). Back requests
+     0x21 (Display Options) instead of 0x17/0x1A. In Display Options, pressing Recomp Settings
+     requests 0x22.
+     First test (user was playing the self-run): the switch to 0x22 worked but 0x21/0x22 then
+     flipped every frame - the menu re-requested its own id (+0x90). build38 swaps +0x90 too
+     (only if it holds 0x21; it is 00 at boot, so the log now prints it on every swap).
+     Unknowns to check in the user test: does Gamma (not in our row list) still draw; does the
+     title still say Display Options; do the transitions play; does B return correctly.
+[94] 2026-10-25  RECOMP MENU FLIP-FLOP: REAL CAUSE FOUND (build39).
+     User test of build38: pressing Recomp Settings showed nothing and B did nothing - the log
+     shows 0x21 -> 0x22 -> 0x21 -> 0x22 ... switching EVERY FRAME (the menu kept re-opening).
+     The +0x90 "own id" theory from [93] was wrong (that byte is 00); the +0x90 swap is removed.
+     Real mechanism (Ghidra, Function_822AAF70 = manager per-frame update):
+       - Function_820B0EE8(switcher) calls handlers[current](mgr, phase 0) every frame and, if
+         the RETURN VALUE differs from the current id, switches to that id. So a menu's
+         per-frame state callback returns "the state that should be active".
+       - The video menu's callback (0x822C0E18) ends with this->vt[0xDC](), which for
+         CKS08MenuOptionVideo360 is 0x82120D08 = "return 0x21" (constant).
+       - The manager's vt+0x358 returns 0x24, vt+0x35C returns 0x25 (the state count).
+     Fix: hook sub_82120D08 - while recomp_mode and r3 == the video menu, return 0x22.
+     Also added [spyro/switch] logging on sub_820B0E58 (switcher) with the caller's LR (first
+     40 switches) for future menu work. Boot verified; menu itself awaiting user test.
+[95] 2026-10-25  RECOMP MENU = 7 NATIVE LEFT/RIGHT PICKER ROWS (build40).
+     User (build39): "yup it works" - the Recomp menu opens and B returns. Request: rows get
+     the same arrow icons as Gamma and change with LEFT/RIGHT instead of A.
+     Findings (Ghidra: double_decomp.c, menuinput_decomp.c, rowstate_decomp.c,
+     doublevalue_decomp.c, doubletext_decomp.c):
+       - Gamma row = CKInterfaceButtonDouble, size 0x410 (ctor 0x822C6B60, new(1040) in
+         0x822C6930). It is a self-contained PICKER: +0x30 label accessor, +0x34 label,
+         +0x40 value CText2d, +0x50/+0x54 arrows, +0x58/+0x5C glows, +0x330 value count,
+         +0x334 value entries (0x2C each, entry+0 = text accessor), +0x338 index, +0x350
+         1 = left, +0x40C&0x1F = which game option it writes (1 language?, 2 = +0x11C 0..10,
+         4/6/7/0x19 toggles, 9/10/11 volumes, ...; 3 = NOTHING), +0x40D bit0 wrap, bit1 hide
+         arrow at ends. Hotspot has 6 pieces (2 glows, 2 arrows, label, value).
+       - Menu input (Function_822C16E8): if the selected row IsA 0x634C (Double) and dir is
+         2/3 -> Function_822C2B50(menu, row, event 3 = left / 4 = right): slot57(row, st, 2),
+         row->OnEvent(e) (sets +0x350, SetState 4 -> Function_822C81D0 moves +0x338, applies
+         the option, Function_822C8DF0 redraws the value), slot57(row, st, 1).
+       - Rows that are NOT in the menu's row list are not updated or drawn (Gamma vanished in
+         the Recomp menu).
+     Built (BuildSettingsRows): 7 clones of the Gamma row with their own label/value CText2d,
+     4 billboards with private render records, hotspot + entries, value lists of our own
+     CKStdText texts, kind = 3, wrap on, arrows always shown. Rows: Renderer (reXglue/Vulkan/
+     plume), Frame rate (30/60/120/Unlimited), VSync (On/Off), Display mode (Windowed/
+     Borderless/Fullscreen), Motion blur (On/Off), Anti-aliasing (Off/FXAA/MSAA 2x/4x),
+     Online co-op (Off/On). Recomp menu row list = {7 settings, Back}; Back up -> row 6.
+     Layout per frame (PlaceSettingsRows): mirror Gamma's piece positions, row i at
+     y + 0.17 - 0.075*i, arrows pushed 0.04 further out. Texts set when the menu opens
+     (RefreshSettingsText: label via 8211B368, value via 822C8DF0). Values are only stored
+     in g_settings[i].value (no backends, not saved yet). Old A-press renderer cycling and
+     the button row in the Recomp menu are gone. Boot verified (all 7 rows built).
+[96] 2026-10-25  RECOMP MENU POLISH: B/BACK, VALUE TEXT, CENTRING, ARROWS (build41-52).
+     User (build40): "spacing needs work, i can't see the options between the arrows, only
+     some when scrolling through and i cannot back out of the menu. aside from those, pretty
+     much perfect".
+     NEW SELF-TEST TOOLING (no player needed):
+       - Env SPYRO_AUTOTEST=1: the Menu::Update hook requests Display Options (~15 s), the
+         Recomp menu (~20 s), highlights row 3 (~25 s), presses RIGHT on it (~30 s) and presses
+         the Back row (~40 s).
+       - project\analysis\autotest-shots.ps1 -OutDir <dir> -Name X -Shots 46,58: runs the game
+         in that mode and captures the game window with PrintWindow (works behind other windows;
+         the process must be DPI-aware, else only the top-left 1280x720 is captured). The intro
+         Bink video can still cover the screen before ~35 s - shoot at ~46 s.
+       - The user may see these test windows (the menu "on the title screen") - that is the
+         test mode, not a bug.
+     FIXES:
+       - B did nothing: B = Function_822C3918 (menu vt+0xF4, called every frame with the cancel
+         row from vt+0xF0): if B held -> SendRowEvent(menu, row, 1, 1). Video vt+0xF0 AND
+         vt+0xEC ("has cancel row", must return exactly 1) are both 0x822A7160 "return 1", so
+         that function must not be hooked (doing so broke B). Now hook sub_822C3918: in the
+         Recomp menu row 1 -> kNumSettings (Back). Verified in autotest: Back -> state 0x21,
+         Display Options intact.
+       - Values invisible: Gamma's value CText2d font has only digits. Values are now clones of
+         the LABEL CText2d (full font).
+       - CText2d +6 anchor modes (calibrated): 1 and 2 both right-align (different anchor
+         offsets); 0/3 odd. Using 2: right edge px = 940 + (x - 0.66) * 1450 (half-res
+         screenshot) - same 1450 px/unit scale as billboards. Values are centred between the
+         arrows from an estimated width (TextWidth, ~0.01345 units per average glyph).
+       - Right arrow moved +0.16 so long values fit; left arrow stays at Gamma's x.
+       - Arrows invisible on rows that changed state: (a) our arrow billboards' private render
+         records were copied at boot, before Display Options loaded the arrow images ->
+         RefreshSettingsArrowRecords copies Gamma's live records when the Recomp menu opens;
+         (b) a picker going highlighted->normal animates its arrows down to a dot (Gamma's own
+         arrows fade to alpha 0x13 when not highlighted - the game shows arrows only on the
+         selected row), but a "fresh" change (state 0xFF -> 0) keeps them visible. So at open
+         every row is set fresh (normal / highlighted for the selected one) and every later
+         "became normal" (slot57 state 0 phase 1) is redone as fresh -> arrows on all rows.
+         Tried and dropped: timer +0x404 (always 0 here), overriding the whole sprite (hid
+         the arrows - it reset the sprite animation), overriding colour+size only (also hid).
+     Known cosmetic: on the highlighted row the left arrow can look pale/whitish.
+     Gamma read 5 in the last test (7 earlier) - our pickers use option kind 3 (no game
+     option), so most likely the user pressed buttons in a test window; keep an eye on it.
+[97] 2026-10-25  RECOMP MENU: VALUE TEXT NOW FOLLOWS THE PICKER (build53/54).
+     User (build52): "very nice claude. i can back out, the spacing looks good but when i scroll
+     the options ... it doesn't cycle back, it's just random and switches to fxaa or back to
+     msaa x4. it's inconsistent and broken."
+     The user's log showed the picker INDEX (+0x338) cycling correctly (0,1,2,0,... both ways),
+     so the bug was the displayed text: the value CText2d's text SOURCE (+0x73C accessor, which
+     every layout rebuild re-reads - Function_8211B4D8) stayed on the first value, so the screen
+     mixed the new value (set by 822C8DF0) with the stale one.
+     Fix: ShowSettingValue(row) on every left/right (slot57 state 4 phase 1) and at menu open:
+     +0x73C = the current value's accessor, then SetText (8211B368) with the value string.
+     New ground-truth log: "[spyro/settings] row N shows '<text>' (index i)" whenever a value
+     text object's inline text (CText2d +0x3C, UTF-16BE; the reader stops at the first space)
+     changes. Autotest now also presses RIGHT 6x on Anti-aliasing (row 5) at ~32-37 s and Back
+     at ~60 s. Verified: Off -> FXAA -> MSAA 2x -> MSAA 4x -> Off -> FXAA -> MSAA 2x, log and
+     screenshot agree.
+[98] 2026-10-25  RECOMP SETTINGS NOW DO THINGS (build55-64) + 60 FPS ANSWER.
+     User: "change the title to recompilation settings" (later: "skip changing the text name,
+     just move on to getting the options to function"), "link the functions so that the options
+     work and effect the game in real time", "can the game be uncapped to 60fps with no issue
+     without interpolation".
+     TITLE: abandoned on request. Findings kept: the title is NOT a CText2d with inline text
+     (scene list + heap scan found none); "Display Options" exists only in the loc string table
+     (0x4135043A). Code removed.
+     NEW FILES: src\spyro_settings.h/.cpp (in CMakeLists): setting table (names/choices/defaults),
+     recomp_settings.ini in the working directory (project\run when using run-game/PLAY.bat;
+     key=index), SetSetting(id, v) = store + apply + save. App OnPreSetup -> spyro::OnPreSetup.
+     The menu rows start from GetSetting(i); the picker index (+0x338) is reset to 0 by the game
+     when the menu opens, so RefreshSettingsText re-applies the saved index then.
+     WHAT EACH SETTING DOES (verified with SPYRO_FPSTEST=1 runs, logs fpstest2.log/vulkantest.log):
+       Frame rate (live): the game paces on the emulated vblank (reXglue cvar "vsync" = GUEST
+         vblank: 60 Hz on / 1 kHz off) and measures real dt per frame. 30 = vblank on + our
+         limiter (OnGameFrame in the game-manager frame hook 0x822AAF70); 60 = vblank on;
+         120 = vblank off + limiter; Unlimited = vblank off. Measured: 30.0 / 60.0 / 120.0 fps,
+         Unlimited ~500 fps (host VSync off) / ~180 (on).
+       VSync (live): NEW SDK cvar host_vsync (monitor sync). D3D12 Present(1, no tearing) vs
+         Present(0, tearing). Vulkan: FIFO when on, applied when the swapchain is recreated.
+       Display mode (live): cvars fullscreen_exclusive + fullscreen (SDK change callbacks resize
+         the window). Verified it switches (an autotest press went borderless 3840x2160).
+       Motion blur (live): hook sub_822E92A0 = CKBlurNodeFx start (vtable 0x8207B220, slot 24),
+         which enables render effect 0x38D (flags |= 0x100). Off = bookkeeping only (+0xC &= ~1,
+         +0x14 = 0.0), the node's update then ends it. NOT yet seen in gameplay.
+       Anti-aliasing (live): Off / FXAA / FXAA Extreme -> cvar swap_post_effect; SDK change makes
+         the plugin re-apply it on change. MSAA dropped (the guest decides MSAA).
+       Renderer (next launch): reXglue = D3D12 backend, Vulkan = LoadGpuPlugin(gpu_plugin,
+         "vulkan") in OnPreSetup (verified: RTX 3080, 60 fps), "plume - soon" = not implemented,
+         falls back to D3D12. Online co-op: "On - soon", no effect yet.
+       Plugin cvars (vsync, swap_post_effect) only exist after the GPU plugin loads (after
+       OnPreSetup); runtime SetFlagByName values are NOT deferred, so they are applied on the
+       first game frame.
+     LOCAL SDK EDITS (TOOLS\src\rexglue-sdk, marked "[spyro recomp]"):
+       src\graphics\graphics_system.cpp  - RegisterChangeCallback("swap_post_effect").
+       src\ui\d3d12\d3d12_presenter.cpp  - REXCVAR host_vsync; Present(host_vsync?1:0, ...).
+       src\ui\vulkan\vulkan_presenter.cpp - FIFO when host_vsync.
+     60 FPS ANSWER: the engine is delta-time based (dt = measured real time, logged as
+     "[spyro/fps] ... game dt" every 5 s): menus run at 60 natively and at 30/120/500 fps the dt
+     follows exactly, so no interpolation is needed - the game simulates at the new rate itself.
+     NOT yet confirmed: actual gameplay (physics/animation/cutscene code could still assume a
+     rate); the user's next play session log will show gameplay fps + dt.
+     Menu font has no brackets: "(soon)" rendered as "soon" -> labels use " - soon".
+     Tools: SPYRO_FPSTEST=1 (env) steps frame rate/VSync/AA/display mode on a timer.
+[99] 2026-10-25  GAMEPLAY SPEED MEASURED; RENDERER NAMES (build65).
+     User: "it run slow, like 30 fps ... im pretty sure its a rexglue issue. is vulkan the same
+     thing as rexglues renderer? ... rename rexglue to xenos, vulkan as xenos - vulkan ...
+     then we can start implementing the plume renderer".
+     User's log run_210951.log (D3D12, Frame rate 60): menus ~45 fps (60 in my runs), GAMEPLAY
+     ~27-29 fps with uneven frame times (dt 0.018-0.067; 0.0667 = the game's dt clamp, 1/15 s).
+     A clean cap would give a steady 0.0333 -> this is a bottleneck, not a cap; most likely the
+     Xenos GPU emulation (command processor / shader translation), not yet profiled.
+     Renderer choices renamed: "Xenos" (reXglue's Xenia-derived Xbox 360 GPU emulation on D3D12),
+     "Xenos - Vulkan" (same emulation on Vulkan), "plume - soon". Fits between the arrows at
+     normal text size (screenshot at21_40), no scaling needed. Both Xenos choices are the same
+     emulator; plume = our own renderer (goal G4), next phase.
+[100] 2026-10-25  PLUME RENDERER - RESEARCH STEP DONE (no game code changed).
+     User: "start the plume renderer with the research step: fetch plume and find the game's
+     built-in Direct3D functions."
+     plume: already in TOOLS\src\plume (cloned by fetch-sources.ps1 at the start), up to date
+     (0ce184b, 2026-10-21); submodules initialised (D3D12MemoryAllocator, Vulkan-Headers,
+     VulkanMemoryAllocator, volk). XenosRecomp (shader microcode -> HLSL) and UnleashedRecomp
+     (reference D3D-layer renderer) also current.
+     APPROACH (same as UnleashedRecomp): replace the game's statically linked X360 Direct3D
+     library function-by-function (hooks on sub_XXXXXXXX) with plume calls; shaders through
+     XenosRecomp. Render states are inline in game code and call function pointers stored in
+     the device object - UnleashedRecomp replaces the device with its own struct
+     (GuestDevice) in CreateDevice.
+     NEW TOOLS: analysis\callgraph.py (build callgraph.json from the generated code; "region"
+     lists a library's entry points = callers from outside), analysis\callers_of.py.
+     RESULT: analysis\D3D_FUNCTION_MAP.txt - globals (device = *0x828379D0, 0x5E00 bytes),
+     CreateDevice sub_82435BB0, Present sub_82436AC0, CreateTexture sub_824213D0,
+     CreateVertexBuffer sub_8242D858, CreateIndexBuffer sub_8242D980, CreateVertexDeclaration
+     sub_82427200, Create*Shader sub_82428768/sub_82428878, SetTexture sub_82421750,
+     SetStreamSource sub_82423FD8, SetIndices sub_824240F8, SetRenderTarget sub_82424840,
+     SetDepthStencilSurface sub_82424B88, SetViewport sub_82424710, DrawPrimitive
+     sub_8242C6E8, DrawIndexedPrimitive sub_8242CAD8, DrawPrimitiveUP sub_8242C0E0, Clear
+     sub_82436E90, Resolve sub_82437210, + Lock/Unlock, AddRef/Release, descs, device layout.
+     The D3D library is at ~0x82418000-0x82444A00; the engine's graphics layer (plain functions)
+     at ~0x823AD000-0x82410000; engine start-up = sub_823AF878, end of frame = sub_823B1058.
+     STILL TO FIND: SetVertexDeclaration, SetScissorRect, sampler-state table, the device's
+     SetRenderState pointer table offset, resource destructor; confirm vertex-vs-pixel for the
+     two shader creators/setters and the two ShaderConstantF setters.
+     NEXT (proposed): plume skeleton - build plume into the project (CMake), open a plume
+     device/swapchain on reXglue's window behind the "plume" renderer choice, and hook
+     CreateDevice/Present/Clear first (first pixels = a cleared screen), then textures,
+     buffers, shaders (XenosRecomp), draws.
+[101] 2026-10-25  PLUME SKELETON WORKS: the game runs at 60 fps with plume presenting its screen.
+     User: "start the plume skeleton: build plume into the project and get a cleared screen with
+     the plume renderer choice."
+     BUILD: CMakeLists adds TOOLS\src\plume (add_subdirectory, static lib; D3D12 + Vulkan
+     backends) + d3d12/dxgi/dxguid. New sources: src\plume_renderer.{h,cpp} (plume device,
+     swapchain on the game window, clear, present; vsync follows Recomp Settings),
+     src\plume_hooks.cpp (D3D hooks, only active in plume mode), src\hang_dump.{h,cpp}.
+     RENDERER CHOICE: "plume" (no longer "soon"). In OnPreSetup, renderer=plume clears
+     config.gpu_plugin -> no Xenos GPU plugin, reXglue "detached mode" (window opened, app
+     renders). App OnPostSetup gives plume the HWND (window()->GetNativeWindowHandle()).
+     spyro::PlumeActive() tells hooks which mode this run is in.
+     HOW THE GAME RUNS WITHOUT A GPU (plume mode):
+       - The game's own CreateDevice (sub_82435BB0) still runs (Vd* kernel calls just warn), so
+         the device object (and its inline render-state function tables) is genuine.
+       - Device command buffer (+0x30 write, +0x38 end) -> 8 MB scratch (game operator new),
+         rewound every frame: unreplaced D3D code writes GPU packets there harmlessly.
+       - BlockOnFence sub_8242F1B0 (and every frame): write the last submitted fence (+0x2A9C)
+         into the GPU "retired" word (*(+0x2A90)) -> no fence wait can block.
+       - Swap sub_824364B0 (what the engine's end of frame really calls, not Present) and
+         Present sub_82436AC0 -> plume present.
+       - Draw calls (sub_8242C6E8/8242CAD8/8242C0E0/8242C648) skipped for now (the UP ones
+         waited for a GPU ring).
+       - Resolve sub_82442670 (the 3652-byte one; sub_82437210 is NOT Resolve) skipped; its
+         clear colour (r10 -> D3DVECTOR4 r,g,b,a) is what plume clears with when the resolve's
+         destination is the front buffer Swap shows (0x40002910). The game clears its front
+         buffer to (0,1,0,0) = GREEN every frame (always hidden under its drawing on Xenos);
+         the game never calls Clear (sub_82436E90).
+     NEW TOOL hang_dump: in plume mode, if Swap stops for 6 s, every thread's native stack is
+       logged as game functions (RtlVirtualUnwind + PPCFuncMappings; originals of hooked
+       functions registered with AddSymbol). Found each stall in one run.
+     RESULT (plume9.log / screenshot plume9_20.png): D3D12 swapchain 2880x1620, steady 60.0 fps,
+       menus run (autotest reached the Recomp menu), window = solid green (the game's clear).
+     Regression: Xenos (D3D12/Vulkan) unchanged - every hook calls the original when not in
+     plume mode (xenos_regress run, 60 fps, menu drawn normally).
+     NEXT: draw calls -> plume (vertex/index buffers, vertex declarations, textures), shaders via
+     XenosRecomp, render targets/resolve; start with the 2D menu (DrawIndexedPrimitiveUP from
+     the engine's UI code sub_823C1E30).
+[102] 2026-10-25  PLUME 2D PATH - GROUNDWORK (draw capture, constants, shader capture, XenosRecomp).
+     User: "start drawing with plume, beginning with the 2D menus."
+     WHAT THE MENUS DRAW (plume2d2.log, logged per distinct draw kind):
+       - Menus: ~56 DrawIndexedVerticesUP + 2 DrawVerticesUP per frame; NO DrawVertices /
+         DrawIndexedVertices (no 3D) in the menus.
+       - UI layout (decl 0x4002C1B0, stride 36): FLOAT3 POSITION @0, FLOAT3 NORMAL @12, D3DCOLOR
+         COLOR @24, FLOAT2 TEXCOORD @28; positions are a unit quad (-0.5..0.5) -> placed by
+         the vertex shader's matrix (shader constants).
+       - Full-screen layout (stride 28): FLOAT4 POSITION, D3DCOLOR, FLOAT2 TEXCOORD with half-texel
+         UVs (0.5/1280, 0.5/720); intro video: stride 20 FLOAT3 + FLOAT2, 3 x 8-bit planes (YUV).
+       - Vertex declaration object: elements from +0x34, 12 bytes {stream<<16|offset, X360
+         type code (0x002A23B9 FLOAT3, 0x002C23A5 FLOAT2, 0x001A23A6 FLOAT4, 0x00182886
+         D3DCOLOR), method<<24|usage<<16|index<<8}, end = stream 0xFF. Device +0x2E2C = current
+         declaration (IsSet type 5).
+       - Texture fetch constant for sampler s: device + (s+0x30)*0x18 (6 dwords; e.g. sampler 0
+         at +0x480); texture object +0x1C.. holds the same 6 words. Bound textures +0x3100.
+     SHADER CONSTANTS: vertex c[n] at device +0x780 + 16n (SetVertexShaderConstantF sub_824268F0:
+       addi r10,r4,120 -> *16), pixel c[n] at device +0x1780 + 16n (sub_824269D0: +376). Big-
+       endian floats. (No ortho 2/1280 in there: UI uses a full matrix.)
+     SHADERS: CreatePixelShader = sub_82428768 (containers 0x102A1100), CreateVertexShader =
+       sub_82428878 (0x102A1101) - confirmed by the container type bit. Hooked (pass-through) to
+       save every container: shaders\<shaderA|shaderB>_<FNV hash>.bin in the working dir
+       (plume mode always, otherwise env SPYRO_DUMPSHADERS). One boot + menus: 1063 shaders
+       (215 pixel, 848 vertex) - the game creates them at load.
+     XenosRecomp (MIT, TOOLS\src\XenosRecomp) BUILT: TOOLS\build\XenosRecomp\XenosRecomp\
+       XenosRecomp.exe (clang-cl + ninja). Translates Spyro containers (e.g. the video YUV
+       shader: tfetch2D x3 + tor/tog/tob colour matrix - names from the game's reflection data).
+       Survey (analysis\shader_survey.ps1 -> analysis\shader_survey\survey.csv): 2/1063 compile.
+       1009 fail on undeclared interpolators like iPosition1 / iFog0: Spyro passes VS->PS data in
+       semantics XenosRecomp's INTERPOLATORS table lacks (it only has TEXCOORD0-15, COLOR0-1);
+       49 similar on the VS side; 3 need g_SpecConstants as a non-library compile.
+     PLAN (2D menus with plume):
+       1. Fork XenosRecomp into the project (our copy, MIT) and teach it Spyro's interpolator
+          semantics (POSITION1, FOG0, ...) until the survey is ~100%; output a shader cache.
+       2. plume renderer side of XenosRecomp's contract (shader_common.h): VS/PS constant buffers
+          (little-endian copies of device +0x780 / +0x1780), shared constants (booleans, alpha
+          threshold, half-pixel offset), bindless texture/sampler descriptor indices.
+       3. Vertex declaration -> plume input layout; render states -> pipeline (blend, cull, depth).
+       4. Texture decode: fetch constant -> address/format/size, Xbox 360 tiling, endian; cache.
+       5. DrawIndexedVerticesUP / DrawVerticesUP -> upload vertices/indices, draw into the plume
+          back buffer; then the full-screen passes and the video shader.
+
+[103] XENOSRECOMP FORK: project\shader_recomp (SpyroShaderRecomp, fork of XenosRecomp 990d03b, MIT).
+     - shader_recompiler.cpp: INTERPOLATORS += {Fog,0},{Position,1} (Spyro's VS->PS semantics).
+     - shader_common.h: spec constants. SPIR-V reads g_SpecConstants from shared constants +276;
+       D3D12 = cbuffer SpecConstants register(b3, space4) (a root constant), so NO library
+       compiles are needed.
+     - main.cpp directory mode: SpyroShaderRecomp <shader dir> <out .bin> <shader_common.h>
+       writes the "SPSC" cache: 16-byte header + 32-byte entries {u64 FNV-1a hash of the
+       container, dxilOff, dxilSize, spirvOff, spirvSize, flags bit0 = pixel, specMask}.
+     - Built: TOOLS\build\SpyroShaderRecomp\SpyroShaderRecomp.exe. Run on project\run\shaders ->
+       project\run\spyro_shaders.bin: 1063/1063 shaders translated (25 MB, DXIL + SPIR-V).
+
+[104] PLUME DRAW PATH (2D menus) - src\plume_renderer.cpp, src\plume_hooks.cpp, src\xenos_texture.*
+     - Shader hooks register guest shader object -> cache hash (+ VS inputs from the container).
+     - DrawIndexedVerticesUP / DrawVerticesUP -> plume_renderer::Draw: vertex declaration ->
+       input layout, constants byte-swapped into b0/b1, shared constants (texture descriptor
+       indices, booleans, half pixel, alpha test), blend/depth from register shadows
+       (RB_BLENDCONTROL0 +0x2938, RB_DEPTHCONTROL +0x2934, RB_COLOR_MASK +0x28DC, RB_ALPHA_REF
+       +0x2904), fan/quad/rect list converted to triangle lists.
+     - Textures: xenos_texture decodes the fetch constant, untiles (XGAddress2DTiledOffset),
+       endian swaps; formats R8, RGBA8, R8G8, BC1/2/3, BC5.
+     - KEY FINDING: texture data for physical addresses >= 0xE0000000 sits at address + 0x1000
+       (the 4 KB quirk; proved offline with SPYRO_DUMPTEX + analysis\texdump_view.py shift4k).
+     - Rect list: 4th corner = v1 + v2 - v0 where v0 is the right-angle corner (diagonal =
+       longest side).
+     - RESULT (draw3 screenshot): Recomp Settings menu draws through plume with correct text,
+       arrows, glow and the title banner. Still missing: background art (render targets /
+       Resolve), a purple quad covering the top-right quarter, video, 3D.
+
+[105] PLUME: MENU BACKGROUND VIDEO + VIEWPORT TRANSFORM + SPEED
+     - Debug: env SPYRO_PLUMEDRAWS=<frame> logs every draw of that frame ([plume/draw]: prim,
+       stride, shaders, render target, viewport, VTE, first positions, c0-c3, tex0).
+     - The menu background is NOT a render target: it is the YUV video (3 x R8 1280x720
+       planes) drawn as a screen-space strip with positions in PIXELS. The purple quarter was
+       that draw read as clip space.
+     - Register shadows (confirmed, linear mapping): PA_CL_VPORT_XSCALE/XOFFSET/YSCALE/YOFFSET
+       at device +0x2908/+0x290C/+0x2910/+0x2914; PA_CL_VTE_CNTL at +0x294C (0x43F normal
+       draws, 0x400 = viewport transform off for the video).
+     - Shader fork: VS ends with oPos.xy = oPos.xy * g_NdcScale + g_HalfPixelOffset * oPos.w
+       (g_NdcScale = shared constants +280 / packoffset c17.z). Renderer folds VPORT scale/
+       offset (or 1/0 when VTE disables them) into NDC for the 1280x720 target; half pixel is
+       now half a WINDOW pixel (removed the green 1-pixel edge lines when upscaled).
+       Shader cache rebuilt (1063/1063).
+     - RESULT (draw7): Recomp menu over the animated Spyro/Cynder background, like Xenos.
+       User: image looks clean, the menu flicker is completely gone in plume.
+     - SPEED: [plume/time] logs every 5 s. Menus were 14 fps: GuestReadable (VirtualQuery)
+       cost ~54 ms/frame (~1 ms per call on the guest mapping). Fixed by caching readable
+       regions per 64 KB page (cleared every 60 frames).
+     - RESULT (draw10): menus locked 60 fps in plume; render thread ~3 ms/frame (mostly the
+       video plane decode), the rest is vsync wait. Green edge lines gone.
+     - NEXT: 3D draws (DrawVertices / DrawIndexedVertices with vertex/index buffers), render
+       targets + Resolve, depth formats (k_24_8), culling, then gameplay; Vulkan path later.
+
+[106] PLUME RENDERS 3D GAMEPLAY (2026-10-26). User: "start on plume's 3D drawing so gameplay renders."
+     TEST TOOLS (no player needed; never touch the player's files):
+     - src\test_input.cpp: env SPYRO_INPUTSCRIPT=<file> = scripted controller 1. Lines
+       "<seconds> <buttons>[+..] [hold]" (A B X Y START BACK UP DOWN LEFT RIGHT LB RB LT RT
+       LSU LSD LSL LSR). Hooks: sub_82412B50 XInputGetState (merge buttons), sub_82412B48
+       XInputGetCapabilities (pad 1 connected), sub_82412C28 XInputGetKeystroke (the title's
+       "Press START" reads keystrokes; VK_PAD_* 0x58xx down/up events).
+     - project\run\tests\to_gameplay.txt: START 20 s (skip Sierra logo), START 27 (title),
+       A 32/37/42 (main menu -> Single Player) -> gameplay in the arena ~45-95 s.
+     - analysis\autotest-shots.ps1 -InputScript <file> -Renderer <0|1|2>: test runs use their
+       own settings file (env SPYRO_SETTINGS_FILE = run\tests\test_settings.ini, read by
+       spyro_settings.cpp) and their own saves (run-game.ps1 -UserDir testuser = a copy of
+       run\user made once). The player's recomp_settings.ini and saves are never modified.
+     DEBUG SWITCHES (plume): SPYRO_PLUMEDRAWS=<frame> (every draw + SetRenderTarget/
+       SetViewport/ClearF/Resolve/SetPredication of that frame), SPYRO_PLUMEVIEW=<n> (show the
+       frame's n-th Resolve result instead of the front buffer), SPYRO_PLUMESKIP=a-b (leave out
+       draws a..b), SPYRO_PLUMENODEPTH=1. [plume/time] every 5 s. Shader translator:
+       env SPYRO_DUMPHLSL=<dir> writes every shader's HLSL (analysis\hlsl\<hash>.hlsl).
+     D3D FUNCTIONS FOUND:
+       DrawVertices sub_8242C6E8(dev, prim, startVertex, count);
+       DrawIndexedVertices sub_8242CAD8(dev, prim, baseVertex -> VGT_INDX_OFFSET, startIndex,
+         indexCount). Index buffer: device +0x3094, data VA at ib+0x18, ib+0 bit31 = 32-bit.
+       SetStreamSource sub_82423FD8: stream s buffer +0x30AC+4s, stride/4 byte at +0x30F0+s,
+         GPU address in vertex fetch constant 95-s = device +0x778-8s.
+       ClearF sub_82444670(dev, flags, rect, D3DVECTOR4* color, z f1, stencil r7): flags
+         0x1-0x8 = color targets 0-3, 0x10 = depth, 0x20 = stencil.
+       SetPredication sub_82436D20(dev, tile mask 3/0xC/0x30, 0 = all); EndTiling sub_82437210.
+       Surface object: +0x24 size (w-1 at bit 18, h-1 at bit 3), +0x28 format (texture codes).
+       Register shadows: PA_CL_VPORT_* +0x2908.., PA_CL_VTE_CNTL +0x294C (WORK_LOG 105).
+     MEMORY: GPU (physical) address P is readable at guest 0xA0000000 + P (reXglue
+       map_info); VA in 0xE0000000 range -> P = VA - 0xE0000000 + 0x1000.
+     FRAME STRUCTURE (gameplay): predicated tiling - scene drawn once into a 1280x256 surface
+       (0x400483E0 + depth 0x40048470), GPU replays per 3 bands; per band Resolve depth (0x14)
+       -> 0x40048390 (k_24_8) and color (0x300 = copy + clear) -> 0x40048340; full-screen copy
+       to the back buffer 0x400064D0 (shader writes color + depth); bloom at 320x180; HUD;
+       Resolve 0x100 -> front buffer -> Swap.
+     PLUME RENDERER NOW:
+       - 3D draws: multi-stream vertex buffers, index buffers, only the vertex range used.
+         Packed vertex types (DEC3N, SHORT*N, FLOAT16, UBYTE4N, ...) decoded on the CPU to
+         float4 (NORMAL/TANGENT/BINORMAL as raw float bits for XenosRecomp's asfloat path).
+       - Render targets: every guest surface -> host texture (>= 1280x720); draws bind the
+         device's RT/depth; Resolve = GPU copy into a host texture found by the guest data
+         address (texture lookups use it, unswizzled); depth Resolve = draw depth into an
+         R32_FLOAT texture (plume patched: D32 depth textures typeless, [spyro recomp]).
+       - Tiling: draws on a surface smaller than the viewport the game asked for use the
+         requested viewport (the D3D lib clamped the registers to the band); clears requested
+         by Resolves while predicated are deferred to SetPredication(0); ClearF rects ignored
+         while predicated.
+       - Present: front buffer drawn into the window with src\shaders\present_blit.hlsl
+         (compiled by TOOLS\dxc at build time), 16:9 letterboxed.
+     RESULT (plume3d14): arena gameplay fully rendered - Spyro, Cynder, grublins, lava hall,
+       bloom, HUD - ~57 fps, render thread ~4.7 ms/frame. Menus unchanged and correct.
+     NEXT: compare against Xenos for missing effects, culling (PA_SU_SC_MODE_CNTL), MSAA/
+       resolution scaling options, Vulkan (SPIR-V) path, video/plume performance at 60+.
+
+[107] PLUME: CHARACTER TEXTURES + "EXPLODING" VINES FIXED (user screenshots: Spyro/grublins smeared,
+     vines broken into blades). Character/vine meshes use 16-bit vertex data (logged once per
+     (usage, type) as "[plume] vertex input ..."): TEXCOORD USHORT2N 0x2C2059, BLENDINDICES
+     SHORT2 0x2C2359 / UBYTE4, BLENDWEIGHT USHORT2N / USHORT4N / DEC3N, NORMAL/TANGENT DEC3N.
+     Two bugs in plume's CPU decode (DecodePacked):
+     - 16-bit pairs: after the 32-bit word swap the FIRST value is in the HIGH half (X = w >> 16).
+       UnleashedRecomp handles the same thing with its swappedTexcoords. Was reading the low half
+       -> U/V swapped (smeared textures) and bone index pairs swapped vs weights (explosions).
+     - BLENDINDICES are uint4 inputs the shader converts numerically (floor(x + 0.5)): expanded
+       values must be integers, not float bits (Expand::integer).
+     8-bit UBYTE4 stays as R8G8B8A8 (X = low byte, same as UnleashedRecomp).
+     RESULT (plume3d16): Spyro, Cynder, NPC, thorn vines, wall roots textured correctly.
+
+[108] PLUME: CULLING + FAIR TEST COMPARISONS (user: "white light in front of Spyro", Cynder pale
+     silver in the purple-beam room).
+     - Checked: every texture the game samples is unsigned, no gamma, no exp_adjust (fetch dword0
+       bits 2-9, dword3 bits 13-18 - logged as "[plume] texture kind"); no pipeline uses the
+       constant blend factor. Neither explains the pale look.
+     - Arena comparison Xenos-Vulkan vs plume (cmpX_* / cmpP_*): characters match (Cynder dark
+       purple with pink wings in both). The pale Cynder / white glow is specific to the room in
+       the user's screenshot; still to reproduce.
+     - Backface culling implemented from PA_SU_SC_MODE_CNTL (bit0 front, bit1 back, bit2 face:
+       0 = CCW front, Xenia's mapping); rect lists never culled; both culled = draw dropped.
+     - autotest-shots.ps1: testuser is reset before every run from run\tests\testuser_base (a
+       snapshot of the player's save), so runs on different renderers start identically. Load
+       timing still varies a few seconds (arena vs lava-rock room at the same timestamp).
+     - Builds no longer force-close a running game (the user may be playing).
+
+[109] RESOLUTION SETTING (user: 720/1080/1440/4K, at the TOP of Recomp Settings, must work on all
+     renderers, especially plume).
+     - spyro_settings: kResolution is now setting 0 (enum order = menu order); ini key
+       "resolution" (0 720p, 1 1080p, 2 1440p, 3 4K, default 720p). ResolutionScale() = 1/1.5/2/3.
+       8 rows: menu spacing kSettingsTop 0.18, kSettingStep 0.068 (fits above Return).
+     - plume (live, no restart): every host render target = max(guest, 1280x720) x scale; resolved
+       textures x scale; Resolve rects / dest points and ClearF rects scaled; NDC uses the target in
+       game pixels (host / scale), half pixel = half a host pixel. Targets are rebuilt when the
+       scale changes (GetTarget compares HostTarget::scale).
+     - Xenos D3D12 + Vulkan (next launch): OnPreSetup now loads the GPU plugin itself for both
+       ("d3d12" / "vulkan") and sets cvar resolution_scale before it starts (whole multiples only:
+       720p 1x, 1080p/1440p 2x, 4K 3x). First frame logs "Xenos resolution_scale in effect: N".
+     - VERIFIED: plume menu 720p->1080p live (targets 1920x1080), plume 4K gameplay (combat scene
+       correct, ~40 fps at 4K vs ~57 at 720p on this PC); Xenos D3D12 4K -> scale 3, D3D12 1080p -> 2,
+       Vulkan 1440p -> 2, both render gameplay. User: "a bit smoother on plume".
+     - autotest-shots.ps1 -Resolution <0-3>; SPYRO_AUTOTEST_RES=1 makes the menu self-test press
+       Right on Resolution. Self-test rows now use the setting ids (spyro::kOnlineCoop, ...).
+
+[110] PLUME: MIPMAPS, DEPTH RANGE, CULLING OFF, ALT-TAB LOGGING (user: skyboxes / far backgrounds
+     look wrong and move when turning; lava-hall cutscene walls replaced by a streaky rock; picture
+     freezes after Alt-Tab while audio plays).
+     - Mipmaps: textures now upload every stored level. Fetch constant fields added to
+       xenos_texture (mip min/max level dw4 2-5/6-9, LOD bias dw4 12-21 /32, packed mips dw5 11,
+       mip address dw5 12-31, aniso dw3 25-27). Layout ported from Xenia texture_util
+       (GetGuestTextureLayout / GetPackedMipOffset, 2D): levels 1.. at the mip address, each padded
+       to pow2 size, 32-block tiles, 4 KB; the packed tail (shorter side <= 16) shares one tile at
+       fixed block offsets; packed level 0 = everything in the base data. Mip address word is in
+       the texture object (+0x30), same address form as the base (+0x20): DataAddress().
+       Samplers: mip filter 2 = base only (maxLOD 0), LOD bias, anisotropy 2x-16x.
+       Seen: 512x512 DXT1 with 5 levels, 64x64 DXT5 with 2 levels.
+     - Depth range: PA_CL_VPORT_ZSCALE/ZOFFSET (+0x2918/+0x291C, VTE bits 4/5) -> viewport
+       min/max depth. The game never uses it (always 0..1), kept for correctness.
+     - CULLING OFF by default: the device shadow PA_SU_SC_MODE_CNTL (+0x2948) only ever showed
+       0x18000 / 0x18002 and is not each draw's state (the D3D library builds it in the draw
+       function plume replaces). With culling the lava-hall walls vanished (rock backdrop showed
+       through); with the opposite winding the arena floor vanished; with none both are right.
+       Env SPYRO_PLUMECULL=1 re-enables register culling for experiments. Finding the real cull
+       state = a later task (the CULLMODE render-state setter / sub_82434CA8).
+     - Alt-Tab: minimise/restore works in windowed and borderless (resize 0x0 -> back, frames
+       continue). The user's frozen-picture session kept rendering at 56 fps, so frames were drawn
+       but not shown; plume now logs "[plume] present FAILED / working again" and every window
+       resize. User later: "alt tab works fine now".
+     - autotest-shots.ps1: -MinimizeAt <s> (minimise, restore 3 s later), -DisplayMode <0-2>.
+       Comparison method that works despite run-to-run timing: capture every 5 s on both
+       renderers (series) and match frames on a contact sheet.
+
+[111] PLUME: SQUASHED BACKGROUND PASS FIXED (user: "skybox" wrong and moving, lava-hall cutscene
+     walls replaced by streaky brown rock, grublins standing on nothing, "shrinks and transforms").
+     - Cause: each 3D frame starts with a BACKGROUND PASS (~18 draws, distant walls/floors/rock)
+       drawn after the engine sets the viewport to the render target's size, then ClearF(0x30)
+       (depth+stencil only - Xbox flags: 0x1-0x8 colour targets, 0x10 depth, 0x20 stencil) and
+       the main pass at 1280x720. With predicated tiling the target is the 1280x256 band surface;
+       on the Xbox the D3D library reports the full screen while tiling, in plume it reported the
+       band, so that pass was squashed into the top third (vertically squashed textures = the
+       horizontal "streaks"; the floors were in it).
+     - Fix: HostTarget::tiled is set when SetPredication(mask != 0) runs with the target bound;
+       on such a target a requested viewport of exactly (0,0,band w,band h) is treated as the
+       whole screen (0,0,1280,720). Verified: band1_85 matches Xenos (ser1_75).
+     - Also this session: the original DrawVertices / DrawIndexedVertices now run before plume's
+       draw (packets into the scratch buffer) so the device's register shadows are flushed
+       (env SPYRO_PLUMENOFLUSH=1 to skip); culling stays off (SPYRO_PLUMECULL=1 to test - may be
+       correct now that the band pass is fixed, untested); debug switches SPYRO_PLUMEDRAWS_AT=
+       <seconds,...> (draw log by time), SPYRO_PLUMENOALPHATEST; draw log shows depth/colour
+       control.
+     - Lesson: compare frames that match (series captures), not "similar" ones - two wrong
+       theories (depth range, culling) came from comparing different camera moments.
+
+[112] PLUME: CUTSCENE WHITE CHARACTERS (user: in in-engine cutscenes random characters turn white
+     then back, e.g. Hunter after the golem fight; also brief white grublins).
+     - Fixed: the "user pointer" draws (DrawVerticesUP sub_8242C0E0 / DrawIndexedVerticesUP
+       sub_8242C648 - particles, smoke, effects, ~75 per gameplay frame) never flushed the D3D
+       render states (entry 111 only flushed DrawVertices / DrawIndexedVertices), so they were
+       drawn with the previous draw's blend / depth state. Visible: the grublins' dark purple
+       spawn-smoke columns were missing (pale half-materialised grublins showed), see-through
+       glows. plume_hooks FlushDrawStateUP: a DrawVertices of 0 vertices (packets go to the
+       scratch command buffer) flushes the states before plume draws the UP call (the UP
+       functions themselves wait for room in a GPU ring). User after the fix: "it seems like
+       you fixed it on my end". Dark smoke now matches Xenos (up1_72 vs ser1_85).
+     - STILL OPEN (older than 110/111 - also in the 7:31 PM plume captures ser2_80, ser3_85):
+       in fights some grublins NEAR THE CAMERA have a pale, washed-out body (s96 vs 25D692 +
+       ps 2D047F draw) while their hands / weapon (s60 vs 7F9E53 draws) look normal; Xenos shows
+       them green. Ruled out: mipmaps (SPYRO_PLUMENOMIPS=1 still pale), per-draw state and
+       material constants (all grublin draws identical: SPYRO_PLUMELOGPS=<ps hash> logs
+       c8/c21/c22 per draw - never change), the fog table (256x16 DXT5, u<4/256 white with
+       alpha 0, then black fog; never rewritten; ps 2D047F always gets it). Next ideas: per-
+       instance vertex data / bone matrices of the body mesh (log stream addresses + decl per
+       instance), ps 2D047F env-map term (+0.7 x EnvMap1 x NormalControlMap.x).
+     - New debug switches: SPYRO_PLUMENOMIPS=1 (base level only), SPYRO_PLUMENULLSLOT=<s>
+       (sampler s left empty), SPYRO_DUMPTEX=<WxH> (dump textures of that size, every change,
+       logs the fetch constant), SPYRO_PLUMELOGPS=<hash> (material constants per draw); the
+       draw log (SPYRO_PLUMEDRAWS*) also prints pixel constants c4/c5/c8/c17/c19-c22 and
+       samplers 0-7. Test input script run\tests\to_cutscene.txt (no skip: arena grublin-drop
+       cutscene ~66-80 s, lava hall ~70 s, golem intro ~100 s).
+     - autotest-shots.ps1 now only captures / closes the game it started (PIDs open before the
+       launch are left alone - the player may be playing).
+
+[113] PLUME: PALE / WHITE CHARACTERS FIXED - SAMPLER CACHE EXHAUSTION (user: Hunter, then Cynder
+     pale silver in in-engine cutscenes; near-camera grublins white; centre pedestal pale grey).
+     - Cause: SamplerDescriptor keyed its cache on Fnv(&RenderSamplerDesc) - the struct's padding
+       bytes are uninitialised, so identical samplers hashed differently and every draw could
+       create a "new" one. The 512 sampler slots filled up during play; afterwards new requests
+       got sampler 0 (the first one ever made, wrong address mode). The character shader
+       (ps 2D047F) samples its 256x16 fog table at u ~ 0 for near objects; with a wrapping
+       sampler that blends texel 0 (white, alpha 0) with texel 255 (black, alpha 1) -> ~50%
+       grey fog -> washed-out pale characters. Random which draws got sampler 0 (order of first
+       use), worse the longer the session ran (later cutscenes), more since entry 110 added
+       LOD bias / aniso / maxLOD to the sampler.
+     - Fix: key = the fetch-constant fields the sampler is built from (filters, mip filter, aniso,
+       LOD bias, clamp x/y/z). The same test now needs 6 samplers in total; "[plume] out of
+       sampler descriptors" is logged if 512 is ever reached. Verified (fix1): green grublins,
+       dark pedestal. Necklace flicker / missing tether in the user's cutscene: probably the
+       same cause (wrong sampler for those draws) - not verified yet, needs the user's run.
+     - How it was found: SPYRO_PLUMEFOGDEBUG=1 (fog table replaced by a colour code), shader
+       overrides, then the draw log's per-slot sampler index (smp0 vs smp175 for identical fetch
+       constants).
+     - New tools: F9 in the game window logs the next frame (same as SPYRO_PLUMEDRAWS) - lets the
+       player capture frames where scripts can't go (run_*.log). shader_override\<HASH>.dxil in
+       the run folder replaces one shader (compile analysis\hlsl\<HASH>.hlsl with TOOLS\dxc\bin\
+       x64\dxc.exe -T ps_6_0 -HV 2021 -all-resources-bound -Wno-ignored-attributes -Qstrip_reflect
+       -Qstrip_debug); debug HLSL in run\shader_override_src. SPYRO_PLUMESKIPPS=<hash>,
+       SPYRO_PLUMESKIPN=<index count>, SPYRO_PLUMENULLSLOT_PS=<hash> (with SPYRO_PLUMENULLSLOT).
+       Draw log: vertex declaration + first two host vertices, sampler clamp/filter/index per slot.
+     - Test runs sometimes take the story-intro path instead of loading the arena (user: during
+       the intro videos START, UP, A skips them) - to_cutscene.txt not yet updated for that.
+
+[114] MENUS: RECOMP SETTINGS AFTER GAMEPLAY + A RECOMP SETTINGS BUTTON IN THE PAUSE MENU'S OPTIONS
+     (user: Recomp Settings gone from Display Options after playing / Save and quit; wants it in
+     the pause menu's Options, as a stone plank LEFT of Tutorial).
+     - Menu sets: the game builds a NEW set of menu objects when gameplay starts / after Save and
+       quit (new Display Options object from the array ctor 0x822E0AD8). Our row was only built
+       for the boot object. Now: when a Display Options object that is IN the manager's state
+       list (arr[0x21]) differs from the one we built on, the Recomp row + settings rows are
+       rebuilt on it (g_row_menus = every object we added rows to; the destructor hook detaches
+       ours from any of them; state slot 0x22 may be re-aliased if it holds one of ours).
+       g_manager = the CKS08GameManager (lives all session) - never read a stale menu's +0x08.
+     - IN A LEVEL the menus are different objects AND classes: pause = state 0x0F (vt 0x8207A4A0,
+       7 rows), its Options = state 0x17 (vt 0x8207A110, 13 rows), Sound Options 0x1D
+       (CKS08MenuOptionSound360, 4 rows). The level's list has NO Display Options (0x21/0x22
+       empty; the main-menu object is freed - opening 0x22 through it was a null-read crash).
+       (Main menu: 0x06 "Pause"-titled main menu, Options 0x1A (14 rows), Display Options 0x21.)
+     - Pause Options button: its row 8 is the Display Options button parked off screen (x ~1.04,
+       no neighbours, plank only). We reuse it: own hotspot (unanchored) + clones of Sound Options'
+       label ("Recomp Settings", own text source) / plank / two glow sprites, placed per frame on
+       the Tutorial line left of Tutorial (kIgoGapX 0.255). LEFT on Tutorial (an on/off switch
+       that eats LEFT) is redirected in the direction hook (sub_822C2DC0) to select row 8; row 8
+       right -> Tutorial, up -> Subtitles, down -> Vibration P1. Press = SendRowEvent event 1
+       (hook sub_822C2B50, request made AFTER the original). Plank render records follow Sound
+       Options' live ones; glow records only from Sound Options / Reset while THEY are highlighted
+       (else drawn as a plain yellow box) - until then our glow is hidden (plank+text still
+       brighten when selected).
+     - Recomp Settings in a level is HOSTED ON THE LEVEL'S SOUND OPTIONS (same make-up as Display
+       Options: Double picker rows + Back button): BuildRecompHostOnSound builds the settings rows
+       from its first row, aliases 0x22 to it; RecompRow now has normal_count / back_index /
+       normal_sel (Display 3/1/2, Sound 4/3/0); hooks sub_822E0948 (Sound slot 57 ->
+       RecompMenuRowEvent, shared with Display Options) and sub_82187E80 (Sound "my state id" ->
+       0x22 in Recomp mode); g_host_dy keeps the list where it is on Display Options. Back goes
+       to g_recomp_return (0x17 from the pause button, 0x21 from Display Options). The Sound
+       Options title reads "Recomp Settings" while hosting (its CText2d text source swapped, put
+       back when Sound Options shows as itself). CText2d inline text (+0x3C) stores spaces as 0.
+       Main-menu Recomp keeps the "Display Options" title (that title is drawn by its UI movie).
+     - Verified by test runs (ps4, mm1): pause -> Options -> Recomp Settings button -> Recomp
+       Settings (title right, values right) -> B -> pause Options; main menu Display Options ->
+       Recomp Settings -> Back still fine. User confirmed the after-gameplay fix.
+     - Test tools: test pad script lines "@<hex menu state> <s> <buttons>" (times from the first
+       frame of that menu state; spyro::CurrentMenuId()); scripts run\tests\to_pause_recomp.txt,
+       to_pause_sound.txt, to_pause_options.txt. In this test save the game goes into the level,
+       pause and its Options by itself. Debug env: SPYRO_DUMPMENU=<hex id> (rows + vtable slots),
+       SPYRO_LOGMENUS=1, SPYRO_OPENMENU=<id>@<s>. autotest-shots.ps1 now always closes its own
+       game (try/finally) and skips a capture when the window has no client area.
+     - NOTE: the player's controller also drives test windows (XInput is global).
+     - FOLLOW-UP: the user still saw the yellow box (glow records snapshotted from a highlighted
+       Sound Options were not a usable image either). The button's two glow sprites are now
+       always hidden; selected = brighter plank and text. Verified with run\tests\
+       to_pause_glow.txt (Sound Options highlighted first, then the button): no box.
+
+[115] PLUME: PERIODIC MICROSTUTTER FIXED (user: walking around, smooth for a few seconds then a
+     stutter, every ~3 s).
+     - Hitch detector added to plume Present: a frame > 1.6x the running average (and > 22 ms)
+       logs "[plume/hitch]" with the frame's draws / textures / decode / readable / hash /
+       vertices / record time, submit+GPU wait, time outside plume, new pipelines / textures.
+     - Cause: GuestReadable's cache (which guest ranges VirtualQuery says are readable) was
+       cleared every 60 frames (a guard against freed memory); the next frame re-queried every
+       range: ~110 ms of VirtualQuery -> a 120 ms freeze every 60 frames (hz1: 29 hitches in ~30 s
+       of gameplay, all "readable ~110 ms").
+     - Fix: (1) reXglue [spyro recomp]: rex::memory::UnmapGeneration() - a counter bumped by
+       DeallocFixed and by Protect(kNoAccess) (memory_win.cpp / memory_posix.cpp, utils.h); guest
+       frees never decommit host memory, they only protect pages no-access, so this catches every
+       way a guest range becomes unreadable. plume clears its cache only when the counter
+       changed since the last frame (a handful of times per level load). (2) The cache now keys
+       whole VirtualQuery regions (std::map start -> end, upper_bound lookup) instead of one
+       region per 64 KB page, so one query covers a whole region.
+     - Result (hz2): gameplay steady 60 fps, readable 0.1 ms/frame, no periodic hitches; left:
+       level load (~80 ms, 109 texture decodes + 25 pipelines), first Recomp Settings open in a
+       level (~116 ms building the rows, in a menu), a rare ~30 ms game-side frame.
+     - Noted for the performance work: per frame (arena, 720p) draws ~3.6 ms (vertices 2.2,
+       hash 0.7), submit+wait ~4.7 ms; plume waits for the GPU every frame (waitForCommandFence
+       right after submit - no CPU/GPU overlap).
+
+[116] PLUME PERFORMANCE: 4K ABOVE 60 (user: RTX 3080 + Ryzen 9, wants 4K above 60 fps).
+     Measured in the arena fight (test save, run\tests\none.txt) at 4K, Frame rate Unlimited,
+     V-Sync off (autotest-shots.ps1 new -FrameRate / -VSync params). Before: 57-73 fps.
+     - (1) Frames in flight (plume_renderer.cpp): kFramesInFlight = 2 FrameSlots, each with its
+       own command list, fence, acquire semaphore, 96 MB upload ring and dead-resource lists.
+       BeginFrame picks slot frame % 2 and only waits for THAT slot's previous submit
+       (RetireSlot); Present submits and returns (no wait). WaitForGpuIdle() (all slots) before a
+       swapchain resize. Swapchain 3 images. -> 82-85 fps, "waiting for the GPU 0.00".
+     - (2) Profile: "game D3D state flush" (time in the game's own D3D draw functions plume runs
+       to flush render state, plume_hooks FlushTimer) = 0.14 ms/frame - not a cost.
+     - (3) Texture change check (SampleHash) once per texture per frame (TextureEntry::checked =
+       frame + 1) instead of on every bind: hash 0.8 -> 0.2 ms, textures 1.2 -> 0.55 ms.
+     - (4) Vertices / indices of lists and strips are swapped straight into the upload ring
+       (no std::vector staging + memcpy); fans / quads / rectangle lists and expanded elements
+       still go through vectors. Little gain (~2 ms stays: ~8 MB of vertices + constants are
+       uploaded every frame - a persistent cache of static vertex buffers would be the next
+       step, but needs a safe way to notice CPU updates).
+     - Result: arena 4K uncapped 88-93 fps (frame ~11 ms: plume ~3 ms, the rest is the game's
+       own code). Screens and the cutscene test (cut4) look right, 0 skipped draws.
+
+[117] RANDOM "CRASH" (A FREEZE) FIXED + SQUASHED IN-LEVEL RECOMP MENU TEXT FIXED (2026-10-27).
+     - Freeze: the user's "random crash" was a hang. All 3 hangs in the player logs (run_215653,
+       run_220823, run_165752) came at ~35000 frames (~10 min at 60 fps) with the same render-
+       thread stack: sub_824356F0 (D3D GPU-wait poll) <- sub_8242E438 <- sub_8242E928 <-
+       sub_8242EB58 <- sub_824434C8 ... <- sub_82444670 (predicated tiling) <- sub_823B0638.
+       sub_8242E438 waits on a GPU read position at *(device+0x2A90)+4 (RetireAllFences only
+       writes word +0); no GPU in plume mode -> once that ring wrapped the game waited forever.
+       Other wait loops (sub_8242E4D0 reads +60, sub_82437BF0, sub_824379C8) read other GPU
+       words. All of them stop when the poll sub_824356F0 returns 0, so plume_hooks now hooks it:
+       plume mode -> return 0 at once (first 8 logged: "[plume] GPU wait skipped (called from
+       ...)"). Test frz1 (720p uncapped, 54300 frames): the skip fired at ~frame 35000 from
+       0x8242E490 (the old hang spot) and the game kept running; picture normal.
+     - Squashed text (user screenshot): in a level, before Sound Options had been shown once,
+       its first row's pieces sit at the scene-file positions (label x 0.418, arrows 0.559 /
+       0.615) - the screen arranges them on first show (0.339, 0.550 / 0.623). Our rows mirror
+       them, so the labels slid 0.079 right onto the left arrows. The value x (0.587) is the same
+       either way: PlaceSettingsRows (Sound host, back_index 3) now places label = value - 0.248
+       and arrows = value -0.037 / +0.036. Logged per label on change: "[spyro/settings] label N
+       layout ..." (x, host positions, CText2d layout box/font/word positions).
+     - Title: after Sound Options had been shown itself, FindHostTitle no longer found the
+       title, and the Recomp menu kept "Sound Options". SetHostTitle now reuses the piece found
+       the first time while it is in the host's scene; the host's own text is saved only then.
+     - Test: run\tests\to_recomp_sound_recomp.txt (Recomp -> Sound Options -> Recomp). txt3/txt4:
+       first visit labels in place + "Recomp Settings" title; second visit the same; Sound
+       Options itself shows its own title and rows.
+
+[118] CRASH LOADING THE SECOND LEVEL FIXED (2026-10-27, user: "game crashes when loading second
+     level").
+     - Windows Application log: APPCRASH in D3D12Core.dll offset 0x12ACCC, c0000005, right after
+       "[plume] color target ...: guest 160x90" (no shutdown line in the game log). Reproduced at
+       once by loading the player's save written 4 s before the crash (it starts level 2):
+       autotest-shots.ps1 new -SaveBase <folder in run\tests> (copied from run\user the first time;
+       run\tests\testuser_level2 = that save).
+     - New debug aid: env SPYRO_D3D12DEBUG=1 turns on the D3D12 debug layer; its warnings/errors go
+       to the log as "[plume/d3d12]" after each submit; a vectored handler logs "[plume] access
+       violation inside D3D12 (frame N, last call: X)" plus pending messages (g.last_call is set at
+       the main D3D12 call sites). The "did not pass any clear value" notes are harmless.
+     - Cause: level 2 uses a blend with SRC_COLOR as the ALPHA factor ("CreateBlendState:
+       SrcBlendAlpha[0] ... D3D11_BLEND 0x3 that manipulates color"). Xenos / D3D9 allow colour
+       factors for alpha (meaning their alpha), D3D12 refuses -> pipeline creation failed, but
+       plume's D3D12 backend still returns an object (its ID3D12PipelineState null), so our
+       "pipeline creation failed" skip never fired and setPipeline crashed inside D3D12.
+     - Fix (plume_renderer.cpp): AlphaBlendFactor maps SRC/INV_SRC/DEST/INV_DEST_COLOR to the
+       matching _ALPHA factor for the alpha channel; a pipeline whose D3D12 object is null now
+       counts as failed (draw skipped, no crash).
+     - Test lvl2c (debug layer on, level 2 from the save): no crash, no D3D12 errors, no failed
+       pipelines, 5100 frames; cave flight and waterfall area render normally.
+
+[119] WHITE SHEET OVER THE LEVEL-2 WATERFALL FIXED (2026-10-27, user screenshots: white on the
+     horizon after flying out of the cave, "there was more of this before I captured").
+     - Repro: run\tests\testuser_level2 save, ~52-62 s into the run (scratchpad skiprun.ps1:
+       autotest-shots + SPYRO_PLUMESKIPPS + contact sheet). Same at 720p (not a scale bug).
+     - Debug aids added: SPYRO_PLUMESKIPPS now takes a comma-separated list; SPYRO_PLUMELOGPIPES=1
+       logs every pipeline (pipelines whose alpha uses a colour factor are always logged); the
+       SPYRO_PLUMEDRAWS frame log now also lists each Resolve ("resolve after draw #N: flags,
+       surface -> texture, rect, point, predication").
+     - Bisect: ps 5EEA2A3EAC838C1B draw #134/#197 (329 indices, blend 0x07060706) = the spray /
+       refraction sheet: s6 samples 0x400F5D50, a screen copy. The frame log showed the game
+       resolves the scene's BAND surface 0x400483E0 (guest 1280x256) into 0x400F5D50 mid-frame with
+       NO rect ("whole surface") - plume copied only 1280x256 game px (top 36% of the screen). The
+       rest of 0x400F5D50 kept the previous frame's final picture (it is also the post-process
+       copy, resolve after #167) -> refracted + glowed again every frame -> grew to white, with a
+       straight top edge at the band border.
+     - Fix (plume Resolve): no rect + source marked tiled (band surface) -> copy the whole screen
+       (host target size / scale). Test fx2: clean waterfall, mist and valley; arena (level 1) ok.
+     - Also (correct, not the cause): the pixel shader screen-position register was in HOST pixels
+       (iPos.xy - 0.5) -> 3x too big at 4K. SpyroShaderRecomp now emits iPos.xy * g_PixelScale - 0.5
+       (shader_common.h: g_PixelScale at shared constants +288 / c18.x; plume writes 1/scale in
+       sh[72]). Translator rebuilt with --target SpyroShaderRecomp (the full build fails on zstd's
+       .rc via cmcldeps) and spyro_shaders.bin regenerated (1063/1063; old copy kept as
+       spyro_shaders.bin.before119).
+     - Tried and reverted: limiting the "tiled viewport" rule to band surfaces (no effect).
+
+[120] LAUNCHER + SHIP FOLDER FOR GITHUB (2026-10-27, user: "setup a new folder called ship and
+     put your made launcher in there and everything I need to put onto github"; "make plume the
+     standard for everyone").
+     - Defaults: Renderer default is now plume (spyro_settings.cpp kDefs) for fresh installs;
+       image_dump.bin is only written with env SPYRO_IMAGEDUMP=1 (spyrodotd_app.h).
+     - Launcher: project\launcher\launcher.cpp -> SpyroRecomp.exe (CMake target in spyro_recomp,
+       static CRT, needs only Windows DLLs). First start / Shift held / --choose: file picker for
+       the .iso or default.xex (or --game <iso|xex|folder> without picker). ISO -> own XDVDFS reader
+       (partition at 0 / 0xFD90000 / 0x89D80000 / 0x2080000, "MICROSOFT*XBOX*MEDIA" at sector 32,
+       binary-tree directories) unpacks into <launcher>\game via game.partial, skips $SystemUpdate,
+       progress window, free-space check. Checks Default.xex SHA-256 7C9C8930...0A51171 (warns,
+       default No). Saves the path in launcher.ini, starts bin\spyrodotd.exe (cwd bin, saves in
+       user\, logs in logs\spyro_<date>.log, last 10 kept, extra args passed through).
+     - project\make-ship.ps1 [-Version v0.1.0-prealpha] builds <root>\ship from the current build,
+       using project\ship_template (README.md, LICENSE MIT, THIRD_PARTY_NOTICES.md, gitignore,
+       apply-patches.ps1, release README.txt, RELEASE_NOTES.md, HOW_TO_PUBLISH.md):
+         ship\release\SpyroRecomp-<ver>\ (SpyroRecomp.exe; bin\ spyrodotd.exe rexruntime.dll
+           rexgpu-xenos.dll spyro_shaders.bin + VC++ runtime DLLs 14.44 from TOOLS\msvc bin;
+           licenses\) and its .zip (24.9 MB);
+         ship\repo\ (89 files: sources, toml, launcher, shader_recomp, research scripts, test
+           scripts, TOOLS scripts, docs = WORK_LOG + OVERVIEW, patches\rexglue-sdk.patch and
+           plume.patch = git diff of our local SDK/plume edits vs pinned commits bd833a2 / 0ce184b;
+           XenosRecomp pinned 990d03b);
+         ship\HOW_TO_PUBLISH.md (web-upload steps for the repo + release).
+       It refuses to finish if any .iso/.xex/generated/assets/image_dump file ended up in ship.
+     - Test: release zip unpacked to a scratch folder, SpyroRecomp.exe --game <the ISO>: unpacked in
+       139 s, 417 files / 7,187,862,044 bytes identical to "extracted game" (25 sampled SHA-256
+       equal), hash check passed, game started with plume (recomp_settings.ini written renderer=2),
+       title / menus / Recomp Settings ok. Scratch folder deleted afterwards.
+     - Known for the release (in its README): the shader cache covers levels 1-2 only; plume skips
+       draws whose shaders are missing (later levels may miss objects) -> runtime shader
+       translation is the next big item.
+
+[121] RUNTIME SHADER TRANSLATION (2026-10-27, user: "yes, do that next" - shaders missing from
+     spyro_shaders.bin used to make plume skip those draws for good).
+     - src\shader_translator.cpp/.h: Request(hash, container) when the game creates a shader the
+       cache lacks (plume RegisterShader, called from the CreatePixel/VertexShader hooks with the
+       container bytes); loads shader_cache\<HASH>.dxil if an earlier session made it, else queues
+       it for 1-4 worker threads: SpyroShaderRecomp's ShaderRecompiler (project\shader_recomp\
+       shader_recompiler.cpp compiled into the game with -include pch.h and SPYRO_SHADER_IN_GAME,
+       which drops the tool-only DXC/smol-v/xxHash/zstd includes; fmt = reXglue's) + shader_common.h
+       embedded by CMake (spyro_shader_common.inc, raw string) -> DXC (dxcompiler.dll loaded with
+       LoadLibrary on first use, same args as dxc_compiler.cpp: -T ps/vs_6_0 -HV 2021
+       -all-resources-bound -Wno-ignored-attributes -Qstrip_reflect -Qstrip_debug) -> saved as
+       shader_cache\<HASH>.dxil (via .tmp + rename). ShaderFor: Pending -> draw skipped this time
+       (not marked missing), Ready -> createShader, Failed -> missing.
+     - Build: TOOLS\dxc\inc for dxcapi.h (needs <unknwn.h>/<objidl.h>: the build defines
+       WIN32_LEAN_AND_MEAN); POST_BUILD copies TOOLS\dxc\bin\x64\dxcompiler.dll + dxil.dll next to
+       spyrodotd.exe; make-ship puts them in bin\ and their licenses in licenses\.
+     - Test switch: env SPYRO_NOSHADERCACHE=1 skips spyro_shaders.bin.
+     - Results: level-2 save with SPYRO_NOSHADERCACHE: 1063/1063 translated, 0 failed, 5-52 ms each
+       (avg 13), all within 3.5 s of boot (the game creates every shader at start-up), 0 skipped
+       draws; title, menus, cutscene and arena render correctly. Second start: 0 translated (all
+       from disk). Shipped zip unpacked with bin\spyro_shaders.bin hidden, started via
+       SpyroRecomp.exe --game <folder>: 1063 translated with the bundled DLLs, title screen ok.
+     - Release: zip 35.1 MB (+ DXC DLLs), repo 91 files; README/notes no longer list the shader
+       cache as a known issue.

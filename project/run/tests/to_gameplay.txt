@@ -1,0 +1,10 @@
+# Scripted pad: boot -> title -> main menu -> load the save -> gameplay (WORK_LOG 106).
+# <seconds> <buttons> [hold]
+20  START   # skips the Sierra logo
+27  START   # title: "Press the START button"
+32  A       # main menu (menu 0x09 -> 0x06)
+37  A       # -> Single Player / Two Players (0x23)
+42  A       # Single Player -> intro cutscene (real-time 3D, from ~55 s)
+47  A
+75  START   # try to skip the cutscene
+78  A

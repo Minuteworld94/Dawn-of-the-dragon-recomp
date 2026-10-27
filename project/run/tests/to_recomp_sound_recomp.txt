@@ -1,0 +1,19 @@
+# Scripted pad: the test save goes into a level, pause and the pause Options screen (state 0x17)
+# by itself; Recomp Settings (before Sound Options was ever shown - squashed labels, WORK_LOG
+# 117) -> back -> Sound Options -> back -> Recomp Settings again. Times from the first frame of
+# each anchor menu.
+# <seconds> <buttons> [hold]
+@17 1.5  DOWN    # Tutorial
+@17 3    LEFT    # Recomp Settings button
+@17 5    A       # -> Recomp Settings (0x22)
+@22 5    B       # back to the pause Options (cursor on the Recomp Settings button)
+@22 6.5  UP      # Subtitles
+@22 7.3  UP      # Reset to default (wraps)
+@22 8.1  UP      # Sound Options
+@22 9.5  A       # -> Sound Options (0x1D)
+@1d 3    B       # back to the pause Options (cursor on Sound Options)
+@1d 4.5  DOWN    # Reset to default
+@1d 5.3  DOWN    # Subtitles (wraps)
+@1d 6.1  DOWN    # Tutorial
+@1d 7    LEFT    # Recomp Settings button
+@1d 8.5  A       # -> Recomp Settings again

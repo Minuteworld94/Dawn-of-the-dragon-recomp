@@ -1,0 +1,9 @@
+# Scripted pad: the test save goes into a level, pause and the pause Options screen (state 0x17)
+# by itself; from there the Recomp Settings button (left of Tutorial) -> Recomp Settings -> B back
+# (WORK_LOG 114). Times from the first frame of 0x17.
+# <seconds> <buttons> [hold]
+@17 1.5  DOWN    # Tutorial
+@17 3    LEFT    # Recomp Settings
+@17 5    A       # -> Recomp Settings
+@17 9    DOWN    # Renderer
+@17 11   B       # back to the pause Options

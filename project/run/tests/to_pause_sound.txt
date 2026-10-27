@@ -1,0 +1,6 @@
+# Scripted pad: the test save goes into a level, pause and the pause Options screen (state 0x17)
+# by itself; from there -> Sound Options (state 0x1D). Times from the first frame of 0x17.
+# <seconds> <buttons> [hold]
+@17 1.5  UP      # Reset to default (wraps from Subtitles)
+@17 2.5  UP      # Sound Options
+@17 4    A       # -> Sound Options (0x1D)

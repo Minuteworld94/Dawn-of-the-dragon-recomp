@@ -1,0 +1,10 @@
+# Scripted pad: the test save boots straight into the arena by itself (no presses needed), then
+# pause -> Options (the in-game Options screen, state 0x1A). Times count from the first frame of
+# gameplay (menu state 0x00).
+# <seconds> <buttons> [hold]
+@00 6    START   # pause menu (state 0x06), cursor on Single Player
+@00 8    DOWN    # Moves
+@00 8.8  DOWN    # Armor
+@00 9.6  DOWN    # Elements
+@00 10.4 DOWN    # Options
+@00 11.5 A       # -> in-game Options (state 0x1A)

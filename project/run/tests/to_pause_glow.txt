@@ -1,0 +1,9 @@
+# Scripted pad: pause Options (state 0x17, reached by itself in this test save) -> highlight Sound
+# Options and Reset first, then the Recomp Settings button (the yellow-box case, WORK_LOG 114).
+# <seconds> <buttons> [hold]
+@17 1.5  UP      # Reset to default
+@17 2.5  UP      # Sound Options
+@17 4    DOWN    # Reset to default
+@17 5    DOWN    # Subtitles
+@17 6    DOWN    # Tutorial
+@17 7.5  LEFT    # Recomp Settings

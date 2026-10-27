@@ -1,0 +1,146 @@
+diff --git a/include/rex/memory/utils.h b/include/rex/memory/utils.h
+index 0b4708c..13efb94 100644
+--- a/include/rex/memory/utils.h
++++ b/include/rex/memory/utils.h
+@@ -103,6 +103,10 @@ bool DeallocFixed(void* base_address, size_t length, DeallocationType deallocati
+ bool Protect(void* base_address, size_t length, PageAccess access,
+              PageAccess* out_old_access = nullptr);
+ 
++// [spyro recomp] Goes up every time pages are deallocated or protected to no-access, so code
++// that caches "this address is readable" (the plume renderer) knows when to drop its cache.
++uint32_t UnmapGeneration();
++
+ // Queries a region of pages to get the access rights. This will modify the
+ // length parameter to the length of pages with the same consecutive access
+ // rights. The length will start from the first byte of the first page of
+diff --git a/src/core/memory_posix.cpp b/src/core/memory_posix.cpp
+index b52bf39..f2665bd 100644
+--- a/src/core/memory_posix.cpp
++++ b/src/core/memory_posix.cpp
+@@ -9,6 +9,7 @@
+  * @modified    Tom Clay & Rien Gupta, 2026 - Adapted for ReXGlue runtime (POSIX + macOS)
+  */
+ 
++#include <atomic>
+ #include <cerrno>
+ #include <cstddef>
+ #include <cstdio>
+@@ -316,7 +317,12 @@ void* AllocFixed(void* base_address, size_t length, AllocationType allocation_ty
+   return nullptr;
+ }
+ 
++// [spyro recomp] see UnmapGeneration() in rex/memory/utils.h.
++static std::atomic<uint32_t> g_unmap_generation{0};
++uint32_t UnmapGeneration() { return g_unmap_generation.load(std::memory_order_acquire); }
++
+ bool DeallocFixed(void* base_address, size_t length, DeallocationType deallocation_type) {
++  g_unmap_generation.fetch_add(1, std::memory_order_release);
+   switch (deallocation_type) {
+     case DeallocationType::kDecommit: {
+       // Decommit: remove access first, then release physical pages
+@@ -339,6 +345,7 @@ bool DeallocFixed(void* base_address, size_t length, DeallocationType deallocati
+ }
+ 
+ bool Protect(void* base_address, size_t length, PageAccess access, PageAccess* out_old_access) {
++  if (access == PageAccess::kNoAccess) g_unmap_generation.fetch_add(1, std::memory_order_release);
+   if (out_old_access) {
+     *out_old_access = PageAccess::kNoAccess;
+   }
+diff --git a/src/core/memory_win.cpp b/src/core/memory_win.cpp
+index 9a668e9..cb870ed 100644
+--- a/src/core/memory_win.cpp
++++ b/src/core/memory_win.cpp
+@@ -13,6 +13,8 @@
+ 
+ #include <rex/memory/utils.h>
+ 
++#include <atomic>
++
+ #if WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_DESKTOP | WINAPI_PARTITION_SYSTEM | \
+                             WINAPI_PARTITION_GAMES)
+ #define REX_BASE_MEMORY_WIN_USE_DESKTOP_FUNCTIONS
+@@ -116,7 +118,12 @@ void* AllocFixed(void* base_address, size_t length, AllocationType allocation_ty
+ #endif
+ }
+ 
++// [spyro recomp] see UnmapGeneration() in rex/memory/utils.h.
++static std::atomic<uint32_t> g_unmap_generation{0};
++uint32_t UnmapGeneration() { return g_unmap_generation.load(std::memory_order_acquire); }
++
+ bool DeallocFixed(void* base_address, size_t length, DeallocationType deallocation_type) {
++  g_unmap_generation.fetch_add(1, std::memory_order_release);
+   DWORD free_type = 0;
+   switch (deallocation_type) {
+     case DeallocationType::kRelease:
+@@ -137,6 +144,7 @@ bool Protect(void* base_address, size_t length, PageAccess access, PageAccess* o
+   if (out_old_access) {
+     *out_old_access = PageAccess::kNoAccess;
+   }
++  if (access == PageAccess::kNoAccess) g_unmap_generation.fetch_add(1, std::memory_order_release);
+   DWORD new_protect = ToWin32ProtectFlags(access);
+ #ifdef REX_BASE_MEMORY_WIN_USE_DESKTOP_FUNCTIONS
+   DWORD old_protect = 0;
+diff --git a/src/graphics/graphics_system.cpp b/src/graphics/graphics_system.cpp
+index 8f2fcb0..42963e5 100644
+--- a/src/graphics/graphics_system.cpp
++++ b/src/graphics/graphics_system.cpp
+@@ -136,6 +136,13 @@ X_STATUS GraphicsSystem::SetupGuestGpu(runtime::FunctionDispatcher* function_dis
+     return X_STATUS_UNSUCCESSFUL;
+   }
+   command_processor_->SetDesiredSwapPostEffect(ParseSwapPostEffect(REXCVAR_GET(swap_post_effect)));
++  // [spyro recomp] apply swap_post_effect changes made at runtime (in-game settings menu).
++  rex::cvar::RegisterChangeCallback(
++      "swap_post_effect", [this](std::string_view, std::string_view value) {
++        if (command_processor_) {
++          command_processor_->SetDesiredSwapPostEffect(ParseSwapPostEffect(std::string(value)));
++        }
++      });
+ 
+   // Register GPU MMIO handlers
+   // GPU registers are at 0x7FC80000-0x7FCFFFFF
+diff --git a/src/ui/d3d12/d3d12_presenter.cpp b/src/ui/d3d12/d3d12_presenter.cpp
+index 306118e..492d8a9 100644
+--- a/src/ui/d3d12/d3d12_presenter.cpp
++++ b/src/ui/d3d12/d3d12_presenter.cpp
+@@ -32,6 +32,9 @@
+ 
+ REXCVAR_DEFINE_BOOL(d3d12_allow_variable_refresh_rate_and_tearing, true, "UI/D3D12",
+                     "Allow variable refresh rate and tearing");
++// [spyro recomp] host monitor sync, read on every present so it can change at runtime.
++REXCVAR_DEFINE_BOOL(host_vsync, false, "UI/Presenter",
++                    "Wait for the monitor's vertical blank when presenting (no tearing)");
+ 
+ namespace rex::ui::d3d12 {
+ 
+@@ -1155,9 +1158,12 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(bool execute_ui_drawe
+   // fullscreen is ever used in, the allow tearing flag must not be passed in
+   // fullscreen, but DXGI fullscreen is largely unneeded with the flip
+   // presentation model used in Direct3D 12).
++  // [spyro recomp] host_vsync: sync interval 1 and no tearing flag (they are exclusive).
++  bool host_vsync = REXCVAR_GET(host_vsync);
+   HRESULT present_result = paint_context_.swap_chain->Present(
+-      0, DXGI_PRESENT_RESTART |
+-             (paint_context_.swap_chain_allows_tearing ? DXGI_PRESENT_ALLOW_TEARING : 0));
++      host_vsync ? 1 : 0,
++      DXGI_PRESENT_RESTART |
++          (!host_vsync && paint_context_.swap_chain_allows_tearing ? DXGI_PRESENT_ALLOW_TEARING : 0));
+   // Even if presentation has failed, work might have been enqueued anyway
+   // internally before the failure according to Jesse Natalie from the DirectX
+   // Discord server.
+diff --git a/src/ui/vulkan/vulkan_presenter.cpp b/src/ui/vulkan/vulkan_presenter.cpp
+index 23645ef..7cc4c00 100644
+--- a/src/ui/vulkan/vulkan_presenter.cpp
++++ b/src/ui/vulkan/vulkan_presenter.cpp
+@@ -1381,7 +1381,11 @@ VkSwapchainKHR VulkanPresenter::PaintContext::CreateSwapchainForVulkanSurface(
+   // interfering with GPU command processing, and also to allow tearing so
+   // variable refresh rate may be used where it's available.
+   // Note: If the priorities here are changes, update the cvar descriptions.
+-  if (REXCVAR_GET(vulkan_allow_present_mode_immediate) &&
++  // [spyro recomp] host_vsync (defined with the D3D12 presenter): plain FIFO = wait for the
++  // monitor. Vulkan picks the mode when the swapchain is (re)created (e.g. on a resize).
++  if (rex::cvar::Query<bool>("host_vsync")) {
++    swapchain_create_info.presentMode = VK_PRESENT_MODE_FIFO_KHR;
++  } else if (REXCVAR_GET(vulkan_allow_present_mode_immediate) &&
+       std::find(present_modes.cbegin(), present_modes.cend(), VK_PRESENT_MODE_IMMEDIATE_KHR) !=
+           present_modes.cend()) {
+     // Allowing tearing to reduce latency, and possibly variable refresh rate

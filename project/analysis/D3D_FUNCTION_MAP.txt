@@ -1,0 +1,127 @@
+SPYRO: DAWN OF THE DRAGON (X360) - DIRECT3D FUNCTION MAP  (WORK_LOG 100, 2026-10-25)
+=====================================================================================
+Purpose: the plume renderer (goal G4) replaces the game's statically linked Xbox 360 Direct3D
+library at the function level - the approach UnleashedRecomp uses (TOOLS\src\UnleashedRecomp\
+UnleashedRecomp\gpu\video.cpp, GUEST_FUNCTION_HOOK list at the end). This file maps every D3D
+function we found in Spyro to its role. Addresses are sub_XXXXXXXX in the generated code.
+
+How they were found
+  - Kernel imports Vd* (VdSwap, VdInitializeRingBuffer, ...) are called only by the D3D library,
+    which sits at about 0x8241_8000 .. 0x8244_4A00 (0x8241_81B0 = its memory allocator; other
+    libraries - audio at 0x8244_4A00+, D3DX-like code at 0x8264_xxxx - surround it).
+  - The game engine's graphics layer (plain functions, no vtables) is at about 0x823A_D000 ..
+    0x8241_0000; its start-up function sub_823AF878 calls the D3D API like a D3D9 sample, which
+    named most entry points. Tools: analysis\callgraph.py (graph + "region" entry points),
+    analysis\callers_of.py, Ghidra decompiles d3d_batch1..4_decomp.c, engine_render_decomp.c.
+  - Confidence: [sure] = behaviour matches unambiguously; [likely] = strong evidence;
+    [?] = role clear, exact variant (e.g. vertex vs pixel) still to confirm.
+
+GLOBALS
+  0x828379CC  IDirect3D9* (Direct3D object)
+  0x828379D0  IDirect3DDevice9* = THE DEVICE (allocated 0x5E00 bytes by CreateDevice)
+  0x828379D4  depth/stencil surface;  0x828379D8  back-buffer surface (from GetRenderTarget)
+  0x82839DA0  D3DPRESENT_PARAMETERS used at start-up (0x7C bytes; width +0, height +4)
+  0x8283A044  display mode (GetDisplayMode)
+
+DEVICE / DIRECT3D OBJECT
+  sub_82435BB0  Direct3D_CreateDevice(d3d, adapter, type, hwnd, flags, pp, &device)  [sure]
+  sub_82431520  GetDeviceCaps(d3d, adapter, caps*)                                    [likely]
+  sub_82431180  GetAdapterIdentifier(d3d, adapter, flags, id*) (vendor 0x1002/0x5157) [sure]
+  sub_82431568  GetDisplayMode(device, swapchain, mode*)                              [likely]
+  sub_82431220  CheckDeviceFormat (returns D3DERR_* 0x8876086x)                       [likely]
+  sub_824314A8  CheckDepthStencilMatch                                                [likely]
+  sub_82436AC0  Present(device): copies present params (+0x3168), SetRenderTarget(0, +0x39F0),
+                then sub_82435FC0 (Swap) -> sub_824364B0 (VdSwap, VdGetSystemCommandBuffer)  [sure]
+  sub_8243A028 / sub_8242FCB8 / sub_8243A420 / sub_82439F80: engine init / ring buffer /
+                shutdown / display mode (internal, called by CreateDevice & co.)
+
+RESOURCES (common header: +0 type/flags, low nibble = type: 1 VB, 2 IB, 3 texture, 4 surface,
+           5-7 see IsSet below; +4 refcount; +0x18.. GPU address / fetch-constant words)
+  sub_8242D6F8  AddRef (atomic +4)                                                    [sure]
+  sub_8242D770  Release (27 engine callers)                                           [likely]
+  sub_8242CF28  GetType                                                               [sure]
+  sub_8242DA88  IsSet(resource, device): is it bound anywhere on the device           [sure]
+  sub_824213D0  CreateTexture(w, h, levels, usage, format, pool, &tex?, ...)          [sure]
+  sub_824214F0  CreateRenderTarget / CreateDepthStencilSurface (EDRAM; D24S8 = 0x16/0x17) [likely]
+  sub_82421158  Texture GetSurfaceLevel(tex, level)                                   [sure]
+  sub_82421230  CubeTexture GetCubeMapSurface(tex, face, level)                       [sure]
+  sub_82421310  Get*Level / volume variant                                            [?]
+  sub_82421148  GetLevelCount                                                         [sure]
+  sub_824202D8  GetLevelDesc(tex, level, desc*)                                       [sure]
+  sub_82421628  Surface GetDesc(surface, desc*)                                       [sure]
+  sub_82421210  Texture LockRect -> sub_82420A78                                      [likely]
+  sub_824216C0  Surface LockRect -> sub_82420A78                                      [likely]
+  sub_8242D858  CreateVertexBuffer(length, usage, ...) (type 1)                       [sure]
+  sub_8242D980  CreateIndexBuffer(length, usage, format) (type 2; bit 29 = 32-bit)    [sure]
+  sub_8242D970  VertexBuffer Lock (waits for the GPU: sub_8242D4D0)                   [likely]
+  sub_8242D920  VertexBuffer Unlock (cache flush: sub_8242D1C8)                       [likely]
+  sub_8242DA78  IndexBuffer Lock                                                      [likely]
+  sub_8242DA30  IndexBuffer Unlock                                                    [likely]
+  sub_82427200  CreateVertexDeclaration(D3DVERTEXELEMENT9* list, 12-byte elements, 0xFF end) [sure]
+  sub_82428768  CreatePixelShader(container 0x102A1100) (WORK_LOG 102)                 [sure]
+  sub_82428878  CreateVertexShader(container 0x102A1101; object 0x368 + microcode)    [sure]
+
+STATE
+  sub_82424840  SetRenderTarget(device, index, surface)   (device +0x3098 + 4*index)  [sure]
+  sub_82424188  GetRenderTarget(device, index) (AddRefs)                              [sure]
+  sub_824241D0  GetDepthStencilSurface(device)                                        [likely]
+  sub_82424B88  SetDepthStencilSurface(device, surface)   (device +0x30A8)            [sure]
+  sub_82424710  SetViewport(device, D3DVIEWPORT9*) -> sub_824244A8(x,y,w,h,minZ,maxZ)  [sure]
+  sub_82421750  SetTexture(device, sampler, tex): 6-dword texture fetch constant copied
+                to device + (sampler+0x30)*0x18; binding at +0x3100 + 4*sampler (26)  [sure]
+  sub_82423FD8  SetStreamSource(device, stream, vb, offset, stride, ...): vertex fetch
+                constant at device + (0xEF-stream)*8; binding at +0x30AC + 4*stream   [sure]
+  sub_824240F8  SetIndices(device, ib)                    (device +0x3094)            [sure]
+  sub_82426F28  SetVertexShader?  (binding +0x3198, dirty bit 0x80000)                [?]
+  sub_82426C70  SetPixelShader?   (binding +0x3194)                                   [?]
+  sub_824268F0  SetVertexShaderConstantF -> device +0x780 + 16*reg (big-endian)      [sure]
+  sub_824269D0  SetPixelShaderConstantF -> device +0x1780 + 16*reg                    [sure]
+  sub_82426AB0 / sub_82426B10  Set*ShaderConstantB (bool bits at +0x2780 / +0x2790)   [likely]
+  (sub_82426B70 / sub_82426BC8 probably the Int-constant variants)                    [?]
+  Render states: like every X360 title, SetRenderState is INLINE in game code and calls a
+  per-state function pointer stored in the device (UnleashedRecomp: GuestDevice::
+  setRenderStateFunctions, replaced in CreateDevice). Spyro's table offset: TODO.
+
+DRAWING
+  sub_8242C6E8  DrawVertices / DrawPrimitive(device, primType, start, count): flushes dirty
+                state (sub_82433AE8 / 82433D28 / 82433750 = register uploads), then PM4
+                DRAW_INDX 0xC0012201                                                   [sure]
+  sub_8242CAD8  DrawIndexedVertices / DrawIndexedPrimitive (same shape, 1104 bytes)   [likely]
+  sub_8242C0E0  DrawPrimitiveUP (vertices copied into the command buffer)            [sure]
+  sub_8242C648  DrawIndexedPrimitiveUP                                                [likely]
+  sub_82436E90  Clear(device, count, rects, flags, color, z, stencil) - NEVER CALLED by
+                this game (verified in plume mode, WORK_LOG 101)                      [likely]
+  sub_82442670  Resolve(device, flags, srcRect, destTex, destPoint, level, slice,
+                D3DVECTOR4* clearColor (r10), float clearZ (f1), stencil, params).
+                The game clears through it (flags 0x100 CLEARRENDERTARGET); the front
+                buffer resolve clears to (0,1,0,0) = green every frame               [sure]
+  sub_82437210  EDRAM/tiling helper (NOT Resolve as first thought)                    [?]
+  sub_824364B0  Swap(device, frontBufferTexture r4, params) - what the engine's end of
+                frame calls directly (not Present); front buffer = 0x40002910         [sure]
+  sub_8242F1B0  BlockOnFence(device, fence, ...): waits until **(device+0x2A90) (GPU
+                retired fence) passes fence; +0x2A9C = last submitted fence            [sure]
+  sub_8242F500  BlockUntil-style wrapper (VdGlobalDevice) -> sub_8242F1B0             [sure]
+  sub_8242C128 / sub_8242EB58 / sub_8242E928: space for DrawPrimitiveUP data in a
+                GPU-consumed ring (waits for the GPU)                                 [likely]
+  sub_82444670, sub_82436D20  predicated-tiling helpers (Begin/End tiling)            [?]
+
+DEVICE LAYOUT (bytes; from the functions above)
+  +0x10/+0x18/+0x20  64-bit dirty masks (what the next draw must upload)
+  +0x30 / +0x38      command buffer write pointer / end (sub_8242F940 = make room)
+  +0x2780..          bool constants;  +0x2888/+0x2940 depth surface info
+  +0x2A9C/+0x2AA0    resource fencing;  +0x2ABC..+0x2ABF flags (tiling, ...)
+  +0x3094 index buffer, +0x3098.. render targets (4), +0x30A8 depth, +0x30AC.. 16 streams,
+  +0x3100.. 26 textures, +0x3168 present params copy, +0x3194/+0x3198 shaders,
+  +0x31B8.. tiling copies of the RT/depth bindings, +0x34D4/+0x34D8 pending-release list,
+  +0x39F0 front/back buffer surface. Total size 0x5E00.
+
+UNLEASHED LIST vs SPYRO (what still has to be found)
+  found: CreateDevice, Present, CreateTexture, CreateVertexBuffer, CreateIndexBuffer,
+         CreateSurface (RT/DS), Lock/Unlock (tex/VB/IB), GetSurfaceDesc, SetRenderTarget,
+         SetDepthStencilSurface, Clear, SetViewport, SetTexture, DrawPrimitive,
+         DrawIndexedPrimitive, DrawPrimitiveUP, CreateVertexDeclaration,
+         SetVertexDeclaration (TODO: setter not yet seen), CreateVertexShader,
+         SetVertexShader, SetStreamSource, SetIndices, CreatePixelShader, SetPixelShader,
+         StretchRect/Resolve, GetBackBuffer(GetRenderTarget), DestructResource (TODO).
+  still to find: SetVertexDeclaration, SetScissorRect, SetSamplerState table, the device's
+         SetRenderState function-pointer table, resource destructor, gamma ramp.

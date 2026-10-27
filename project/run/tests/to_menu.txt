@@ -1,0 +1,3 @@
+# Menu exploration: boot -> title -> main menu, then look.
+20  START
+27  START

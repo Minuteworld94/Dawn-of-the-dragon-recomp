@@ -1,0 +1,41 @@
+# --- never commit game files ---
+*.iso
+*.xex
+*.xcp
+/extracted game/
+/game/
+project/spyro_recomp/assets/
+# code recompiled from the game's executable (regenerate with rexglue codegen)
+project/spyro_recomp/generated/
+# dumps taken from the running game (they land in project/run, ignored below)
+image_dump.bin
+*.dxil
+spyro_shaders.bin*
+
+# --- build output ---
+out/
+build/
+project/spyro_recomp/logs/
+TOOLS/build/
+
+# --- downloaded toolchain (TOOLS\_scripts fetches it) ---
+TOOLS/*
+!TOOLS/_scripts/
+!TOOLS/env.ps1
+!TOOLS/README.md
+TOOLS/_scripts/*.log
+
+# --- local play / test data ---
+project/run/*
+!project/run/tests/
+project/run/tests/*
+!project/run/tests/*.txt
+project/ghidra/
+/user/
+/logs/
+*.log
+launcher.ini
+recomp_settings.ini
+
+# --- release packaging output ---
+ship/
