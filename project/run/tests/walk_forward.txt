@@ -1,0 +1,5 @@
+# Scripted pad: the test save boots into the arena by itself; from the first gameplay frame
+# (menu state 0x24 = no menu): stand still, then run forward for 3 s (lock-on research,
+# WORK_LOG 123).
+# <seconds> <buttons> [hold]
+@24 4    LSU   10

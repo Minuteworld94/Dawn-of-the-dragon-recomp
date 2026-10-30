@@ -19,10 +19,16 @@
 #include <unordered_set>
 #include <vector>
 
+#include <immintrin.h>
+
+#define XXH_INLINE_ALL
+#include "xxhash.h"  // TOOLS\src\rexglue-sdk\thirdparty\xxHash (CMakeLists.txt)
+
 #if defined(_WIN32)
 #include <windows.h>
 #endif
 
+#include "guest_memory.h"
 #include "plume_d3d12.h"  // the native device, for the debug layer's message queue
 #include "plume_render_interface.h"
 #include "plume_render_interface_builders.h"
@@ -83,6 +89,8 @@ uint32_t Load32(const uint8_t* base, uint32_t a) {
 struct Profile {
   double draw = 0, texture = 0, decode = 0, submit = 0, gpu_wait = 0, flush = 0;  // seconds
   double readable = 0, hash = 0, constants = 0, vertices = 0, record = 0;
+  double v_index = 0, v_copy = 0, v_expand = 0;  // parts of vertices: index scan, plain copy, packed decode
+  uint64_t v_bytes = 0;                          // guest vertex + index bytes read
   uint32_t frames = 0, decodes = 0;
   std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
 } g_prof;
@@ -97,34 +105,39 @@ struct ScopedTime {
   ~ScopedTime() { total += Seconds(start); }
 };
 
-// Readable guest regions found by VirtualQuery (start -> end): VirtualQuery costs up to ~1 ms on
-// the guest's huge mapping, and every draw asks several times. One entry covers a whole region.
-// Forgotten only when reXglue made memory unreadable since the last frame
-// (rex::memory::UnmapGeneration). Clearing it every 60 frames used to cost ~110 ms of
-// VirtualQuery calls on the next frame: a stutter every second (WORK_LOG 115).
-std::map<uint32_t, uint64_t> g_readable;
-
-void ClearReadableCache() { g_readable.clear(); }
-
+// Readable guest memory: cached per region, forgotten when reXglue unmaps guest memory
+// (guest_memory.cpp; clearing it on a timer used to stutter, WORK_LOG 115).
 bool GuestReadable(const uint8_t* base, uint32_t a, uint32_t size) {
   ScopedTime timer{g_prof.readable};
-#if defined(_WIN32)
-  if (a < 0x1000 || uint64_t(a) + size > 0x100000000ull) return false;
-  if (auto it = g_readable.upper_bound(a); it != g_readable.begin()) {
-    --it;
-    if (a >= it->first && uint64_t(a) + size <= it->second) return true;
+  return spyro::GuestReadable(base, a, size);
+}
+
+// Copies big-endian 32-bit words, swapping each (bytes: a multiple of 4). 64 bytes per step with
+// SSSE3 byte shuffles and 16-byte stores - the destination is usually the upload ring (write-
+// combined GPU memory, slow with 4-byte stores). Vertices were ~6.5 ms a frame in Avalar with the
+// word-by-word loop (WORK_LOG 124).
+__attribute__((target("ssse3"))) void CopySwapped32(uint8_t* dst, const uint8_t* src, uint32_t bytes) {
+  const __m128i swap = _mm_setr_epi8(3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12);
+  uint32_t i = 0;
+  for (; i + 64 <= bytes; i += 64) {
+    __m128i a = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + i));
+    __m128i b = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + i + 16));
+    __m128i c = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + i + 32));
+    __m128i d = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + i + 48));
+    _mm_storeu_si128(reinterpret_cast<__m128i*>(dst + i), _mm_shuffle_epi8(a, swap));
+    _mm_storeu_si128(reinterpret_cast<__m128i*>(dst + i + 16), _mm_shuffle_epi8(b, swap));
+    _mm_storeu_si128(reinterpret_cast<__m128i*>(dst + i + 32), _mm_shuffle_epi8(c, swap));
+    _mm_storeu_si128(reinterpret_cast<__m128i*>(dst + i + 48), _mm_shuffle_epi8(d, swap));
   }
-  MEMORY_BASIC_INFORMATION mbi{};
-  const uint8_t* p = base + a;
-  if (!VirtualQuery(p, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT) return false;
-  if (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) return false;
-  uint32_t start = uint32_t(static_cast<const uint8_t*>(mbi.BaseAddress) - base);
-  uint64_t end = std::min<uint64_t>(uint64_t(start) + mbi.RegionSize, 0x100000000ull);
-  g_readable[start] = end;
-  return uint64_t(a) + size <= end;
-#else
-  return a >= 0x1000;
-#endif
+  for (; i + 16 <= bytes; i += 16)
+    _mm_storeu_si128(reinterpret_cast<__m128i*>(dst + i),
+                     _mm_shuffle_epi8(_mm_loadu_si128(reinterpret_cast<const __m128i*>(src + i)), swap));
+  for (; i + 4 <= bytes; i += 4) {
+    uint32_t v;
+    std::memcpy(&v, src + i, 4);
+    v = __builtin_bswap32(v);
+    std::memcpy(dst + i, &v, 4);
+  }
 }
 
 uint64_t Fnv(const void* data, size_t size, uint64_t h = 1469598103934665603ull) {
@@ -229,6 +242,33 @@ struct FrameSlot {
   std::vector<std::unique_ptr<RenderTexture>> dead_textures;
   std::vector<std::unique_ptr<RenderTextureView>> dead_views;
   std::vector<std::unique_ptr<RenderFramebuffer>> dead_framebuffers;
+  std::vector<std::unique_ptr<RenderBuffer>> dead_buffers;
+};
+
+// Converted vertex streams kept on the GPU (WORK_LOG 124): streams with packed formats (DEC3N
+// normals, SHORT2N texcoords, ...) are decoded on the CPU once and reused while the guest data
+// is unchanged - found by an XXH3 hash of the guest bytes plus the layout. They are bump-allocated
+// from big upload-heap chunks; when the chunks are full the whole cache starts over. A source
+// address whose contents keep changing (CPU-animated meshes) is converted per frame as before.
+constexpr uint32_t kVertexChunkSize = 32u << 20;
+constexpr uint32_t kVertexChunks = 8;  // 256 MB
+struct VertexCache {
+  struct Chunk {
+    std::unique_ptr<RenderBuffer> buffer;
+    uint8_t* ptr = nullptr;
+    uint32_t used = 0;
+  };
+  struct Entry {
+    uint32_t chunk, offset, size;
+  };
+  std::vector<Chunk> chunks;
+  std::unordered_map<uint64_t, Entry> entries;  // hash -> converted data
+  struct Source {
+    uint64_t hash = 0;
+    uint32_t changes = 0;
+  };
+  std::unordered_map<uint64_t, Source> sources;  // (guest address, stream) -> last contents
+  uint32_t hits = 0, misses = 0, dynamic = 0, resets = 0;  // per report period
 };
 
 struct Context {
@@ -269,6 +309,8 @@ struct Context {
   std::vector<std::unique_ptr<RenderTexture>> dead_textures;
   std::vector<std::unique_ptr<RenderTextureView>> dead_views;
   std::vector<std::unique_ptr<RenderFramebuffer>> dead_framebuffers;
+  std::vector<std::unique_ptr<RenderBuffer>> dead_buffers;
+  VertexCache vertex_cache;
   std::unique_ptr<RenderPipelineLayout> layout;
   std::unique_ptr<RenderDescriptorSet> textures;
   std::unique_ptr<RenderDescriptorSet> samplers;
@@ -306,6 +348,33 @@ Allocation Upload(uint32_t size, uint32_t align = 256) {
   }
   g.upload_offset = off + size;
   return {g.upload_ptr + off, off};
+}
+
+// Room for a converted vertex stream in the vertex cache (VertexCache); false if it can't fit.
+bool VertexCacheAlloc(uint32_t size, VertexCache::Entry& e) {
+  VertexCache& vc = g.vertex_cache;
+  size = (size + 255) & ~255u;
+  if (size > kVertexChunkSize) return false;
+  if (vc.chunks.empty() || vc.chunks.back().used + size > kVertexChunkSize) {
+    if (vc.chunks.size() >= kVertexChunks) {
+      // Full: start over. The chunks live on until the frames that drew from them are done.
+      for (auto& c : vc.chunks) g.dead_buffers.push_back(std::move(c.buffer));
+      vc.chunks.clear();
+      vc.entries.clear();
+      vc.sources.clear();
+      ++vc.resets;
+    }
+    VertexCache::Chunk c;
+    c.buffer = g.device->createBuffer(RenderBufferDesc::UploadBuffer(kVertexChunkSize, RenderBufferFlag::VERTEX));
+    if (!c.buffer) return false;
+    c.ptr = static_cast<uint8_t*>(c.buffer->map());
+    if (!c.ptr) return false;
+    vc.chunks.push_back(std::move(c));
+  }
+  VertexCache::Chunk& c = vc.chunks.back();
+  e = {uint32_t(vc.chunks.size() - 1), c.used, size};
+  c.used += size;
+  return true;
 }
 
 void CreateSwapchainTargets() {
@@ -346,7 +415,9 @@ void CreateLayout() {
   layout.addRootDescriptor(0, 4, RenderRootDescriptorType::CONSTANT_BUFFER);
   layout.addRootDescriptor(1, 4, RenderRootDescriptorType::CONSTANT_BUFFER);
   layout.addRootDescriptor(2, 4, RenderRootDescriptorType::CONSTANT_BUFFER);
-  layout.addPushConstant(3, 4, 4, RenderShaderStageFlag::VERTEX | RenderShaderStageFlag::PIXEL);
+  // 16 bytes: the game shaders use the first word (descriptor index); the present blit also its
+  // lock-on dot (present_blit.hlsl).
+  layout.addPushConstant(3, 4, 16, RenderShaderStageFlag::VERTEX | RenderShaderStageFlag::PIXEL);
   layout.end();
   g.layout = layout.create(g.device.get());
 
@@ -521,6 +592,7 @@ void RetireSlot(FrameSlot& s) {
   s.dead_framebuffers.clear();
   s.dead_views.clear();
   s.dead_textures.clear();
+  s.dead_buffers.clear();
 }
 
 // Every frame in flight finished (before the swapchain is resized).
@@ -1221,7 +1293,7 @@ bool LoggingFrame() {
   static uint32_t s_frame_logging = UINT32_MAX;
   if (!s_times.empty() && s_frame_logging != g.frame && Seconds(s_start) >= s_times.front()) {
     s_times.erase(s_times.begin());
-    s_frame_logging = g.frame;
+    s_frame_logging = g.frame + 1;  // the whole next frame (this one is already under way)
   }
   return (s_log_frame && g.frame == s_log_frame) || s_frame_logging == g.frame || g_key_log_frame == g.frame;
 }
@@ -1286,6 +1358,15 @@ void Draw(const DrawCall& call) {
     (it->second.pixel ? ps : vs) = &it->second;
   }
   if (!vs || !ps) return skip("vertex or pixel shader unknown");
+  // Recomp Settings "Bloom: Off" (WORK_LOG 125): the game's bloom is the HDR effect's last step -
+  // the scene shrunk to 320x180 keeping the bright parts (ps ACEF9A3E99F0BC87), blurred
+  // (973D060822453192), then added onto the picture by this shader. Leaving out that add removes
+  // the glow; the two small passes before it cost next to nothing and are left alone.
+  constexpr uint64_t kBloomAddShader = 0xDFE8E11EEC4D610Aull;
+  if (ps->hash == kBloomAddShader && spyro::GetSetting(spyro::kBloom) == 1) {
+    ++g.draws;
+    return;
+  }
   RenderShader* vshader = ShaderFor(*vs);
   RenderShader* pshader = ShaderFor(*ps);
   if (!vshader || !pshader) return skip("shader not in cache");
@@ -1450,12 +1531,7 @@ void Draw(const DrawCall& call) {
   // Constants: guest float4 registers byte-swapped to little-endian.
   Allocation vsc = Upload(4096), psc = Upload(3584), shared = Upload(512), zero = Upload(64, 16);
   if (!vsc.ptr || !psc.ptr || !shared.ptr || !zero.ptr) return skip("upload ring full");
-  auto copy_swapped = [&](uint8_t* dst, uint32_t src, uint32_t bytes) {
-    for (uint32_t i = 0; i < bytes; i += 4) {
-      uint32_t v = Load32(base, src + i);
-      std::memcpy(dst + i, &v, 4);
-    }
-  };
+  auto copy_swapped = [&](uint8_t* dst, uint32_t src, uint32_t bytes) { CopySwapped32(dst, base + src, bytes); };
   {
     ScopedTime t{g_prof.constants};
     copy_swapped(vsc.ptr, dev + kDevVsConstants, 4096);
@@ -1624,9 +1700,11 @@ void Draw(const DrawCall& call) {
       index_total = call.index_count;
     }
     for (uint32_t i = 0; i < call.index_count; ++i) out[i] = index_at(i) - vmin;
+    g_prof.v_bytes += uint64_t(call.index_count) * isize;
   } else if (!call.vertex_count) {
     return skip("no vertices");
   }
+  g_prof.v_index += Seconds(vertices_start);
   uint32_t vcount = vmax - vmin + 1;
   if (vcount > (1u << 20)) return skip("vertex range too large");
 
@@ -1636,11 +1714,16 @@ void Draw(const DrawCall& call) {
   std::vector<uint8_t> stream_verts[kZeroSlot];
   Allocation vb[kZeroSlot];
   uint32_t vb_size[kZeroSlot] = {};
+  RenderBuffer* cached_buffer[kZeroSlot] = {};  // stream served from the vertex cache
+  uint32_t cached_offset[kZeroSlot] = {};
+  VertexCache& vc = g.vertex_cache;
   for (uint32_t s = 0; s < kZeroSlot; ++s) {
     if (!(used_streams & (1u << s))) continue;
     uint32_t stride = call.stream_stride[s], src = call.stream_data[s] + vmin * stride, bytes = vcount * stride;
     if (!GuestReadable(base, src, bytes)) return skip("vertex data unreadable");
+    g_prof.v_bytes += bytes;
     if (host_stride[s] == stride && !(s == 0 && call.primitive == 8)) {
+      ScopedTime t{g_prof.v_copy};
       vb[s] = Upload(bytes, 16);
       if (!vb[s].ptr) return skip("upload ring full");
       copy_swapped(vb[s].ptr, src, bytes & ~3u);
@@ -1648,11 +1731,44 @@ void Draw(const DrawCall& call) {
       vb_size[s] = bytes;
       continue;
     }
+    ScopedTime t{g_prof.v_expand};
     std::vector<uint8_t>& out = stream_verts[s];
     if (host_stride[s] == stride) {
       out.resize(bytes);
       copy_swapped(out.data(), src, bytes & ~3u);
       continue;
+    }
+    // Already converted (vertex cache)? Not for rectangle lists (their 4th corners are added to
+    // the stream afterwards).
+    bool cacheable = call.primitive != 8;
+    uint64_t key = 0;
+    if (cacheable) {
+      key = XXH3_64bits(base + src, bytes);
+      VertexCache::Source& so = vc.sources[uint64_t(src) << 4 | s];
+      if (so.hash != key) {
+        if (so.hash) ++so.changes;
+        so.hash = key;
+      }
+      if (so.changes >= 3) {  // rewritten again and again: an animated mesh
+        cacheable = false;
+        ++vc.dynamic;
+      }
+      uint32_t layout[3] = {stride, host_stride[s], vcount};
+      key = Fnv(layout, sizeof(layout), key);
+      for (const Expand& e : expands) {
+        if (e.stream != s) continue;
+        uint32_t f[4] = {e.src_offset, e.type, e.dst_offset, e.integer ? 1u : 0u};
+        key = Fnv(f, sizeof(f), key);
+      }
+      if (cacheable) {
+        if (auto it = vc.entries.find(key); it != vc.entries.end()) {
+          cached_buffer[s] = vc.chunks[it->second.chunk].buffer.get();
+          cached_offset[s] = it->second.offset;
+          vb_size[s] = vcount * host_stride[s];
+          ++vc.hits;
+          continue;
+        }
+      }
     }
     std::vector<uint8_t> swapped(bytes);
     copy_swapped(swapped.data(), src, bytes & ~3u);
@@ -1675,6 +1791,16 @@ void Draw(const DrawCall& call) {
           std::memcpy(o + e.dst_offset, decoded, 16);
         }
       }
+    }
+    VertexCache::Entry entry;
+    if (cacheable && VertexCacheAlloc(uint32_t(out.size()), entry)) {
+      std::memcpy(vc.chunks[entry.chunk].ptr + entry.offset, out.data(), out.size());
+      vc.entries[key] = entry;
+      cached_buffer[s] = vc.chunks[entry.chunk].buffer.get();
+      cached_offset[s] = entry.offset;
+      vb_size[s] = uint32_t(out.size());
+      ++vc.misses;
+      out.clear();
     }
   }
   std::vector<uint8_t>& verts = stream_verts[0];
@@ -1737,7 +1863,7 @@ void Draw(const DrawCall& call) {
   }
 
   for (uint32_t s = 0; s < kZeroSlot; ++s) {
-    if (!(used_streams & (1u << s)) || vb[s].ptr) continue;
+    if (!(used_streams & (1u << s)) || vb[s].ptr || cached_buffer[s]) continue;
     vb[s] = Upload(uint32_t(stream_verts[s].size()), 16);
     if (!vb[s].ptr) return skip("upload ring full");
     std::memcpy(vb[s].ptr, stream_verts[s].data(), stream_verts[s].size());
@@ -1758,9 +1884,15 @@ void Draw(const DrawCall& call) {
     for (const DeclElement& d : decl)
       if (d.usage == 0 && d.index == 0) pos = &d;
     std::string p;
-    for (uint32_t i = 0; i < std::min<uint32_t>(4, vcount) && pos && pos->stream == 0; ++i) {
+    const uint8_t* v0 = vb[0].ptr;
+    if (cached_buffer[0]) {  // stream 0 came from the vertex cache
+      v0 = nullptr;
+      for (const VertexCache::Chunk& c : vc.chunks)
+        if (c.buffer.get() == cached_buffer[0]) v0 = c.ptr + cached_offset[0];
+    }
+    for (uint32_t i = 0; i < std::min<uint32_t>(4, vcount) && pos && pos->stream == 0 && v0; ++i) {
       float xyzw[4] = {};
-      std::memcpy(xyzw, vb[0].ptr + size_t(i) * vertex_stride + pos->offset,
+      std::memcpy(xyzw, v0 + size_t(i) * vertex_stride + pos->offset,
                   pos->type == 0x001A23A6 ? 16 : pos->type == 0x002A23B9 ? 12 : 8);
       p += fmt::format(" ({:.3f},{:.3f},{:.3f},{:.3f})", xyzw[0], xyzw[1], xyzw[2], xyzw[3]);
     }
@@ -1815,12 +1947,12 @@ void Draw(const DrawCall& call) {
     for (uint32_t s = 0; s < 4; ++s)
       if (call.stream_data[s]) layout += fmt::format(" st{}={:08X}/{}", s, call.stream_data[s], call.stream_stride[s]);
     // The first two vertices as the host gets them (expanded elements after the guest stride).
-    for (uint32_t v = 0; v < std::min<uint32_t>(2, vcount) && vb_size[0]; ++v) {
+    for (uint32_t v = 0; v < std::min<uint32_t>(2, vcount) && vb_size[0] && v0; ++v) {
       layout += fmt::format(" | v{}", v);
       for (uint32_t i = 0; i + 4 <= host_stride[0] && i < 160; i += 4) {
         uint32_t word;
         float f;
-        std::memcpy(&word, vb[0].ptr + size_t(v) * host_stride[0] + i, 4);
+        std::memcpy(&word, v0 + size_t(v) * host_stride[0] + i, 4);
         std::memcpy(&f, &word, 4);
         layout += (word > 0x00FFFFFF && word < 0xFF000000) || word == 0 ? fmt::format(" {:.3g}", f) : fmt::format(" #{:X}", word);
       }
@@ -1865,9 +1997,10 @@ void Draw(const DrawCall& call) {
   g.list->setGraphicsPushConstants(0, &spec, 0, 4);
   for (const RenderInputSlot& slot : slots) {
     bool zero_slot = slot.index == kZeroSlot;
-    RenderVertexBufferView view(
-        RenderBufferReference(g.upload, zero_slot ? zero.offset : vb[slot.index].offset),
-        zero_slot ? 64u : vb_size[slot.index]);
+    RenderBufferReference ref = zero_slot                    ? RenderBufferReference(g.upload, zero.offset)
+                                : cached_buffer[slot.index] ? RenderBufferReference(cached_buffer[slot.index], cached_offset[slot.index])
+                                                            : RenderBufferReference(g.upload, vb[slot.index].offset);
+    RenderVertexBufferView view(ref, zero_slot ? 64u : vb_size[slot.index]);
     g.list->setVertexBuffers(slot.index, &view, 1, &slot);
   }
   if (indexed) {
@@ -2069,7 +2202,12 @@ void Present(uint8_t* base, uint32_t front_texture) {
       else vh = vw * 9.0f / 16.0f;
       g.list->setViewports(RenderViewport((float(w) - vw) * 0.5f, (float(h) - vh) * 0.5f, vw, vh));
       g.list->setPipeline(g.blit.get());
-      g.list->setGraphicsPushConstants(0, &front->plain_descriptor, 0, 4);
+      struct {
+        uint32_t texture;
+        float dot_x, dot_y, dot_radius;
+      } blit{front->plain_descriptor, 0, 0, 0};
+      if (spyro::LockOnMarker(blit.dot_x, blit.dot_y)) blit.dot_radius = 0.0105f;  // lock-on target dot
+      g.list->setGraphicsPushConstants(0, &blit, 0, sizeof(blit));
       g.list->drawInstanced(3, 1, 0, 0);
     }
     g.list->barriers(RenderBarrierStage::NONE, RenderTextureBarrier(target, RenderTextureLayout::PRESENT));
@@ -2103,23 +2241,25 @@ void Present(uint8_t* base, uint32_t front_texture) {
   for (auto& t : g.dead_textures) slot.dead_textures.push_back(std::move(t));
   for (auto& v : g.dead_views) slot.dead_views.push_back(std::move(v));
   for (auto& f : g.dead_framebuffers) slot.dead_framebuffers.push_back(std::move(f));
+  for (auto& b : g.dead_buffers) slot.dead_buffers.push_back(std::move(b));
   g.dead_textures.clear();
   g.dead_views.clear();
   g.dead_framebuffers.clear();
+  g.dead_buffers.clear();
   g.in_frame = false;
   g.bound = false;
-  ++g.frame;
-  {
-    static uint32_t s_unmap = rex::memory::UnmapGeneration();
-    static uint32_t s_clears = 0;
-    uint32_t gen = rex::memory::UnmapGeneration();
-    if (gen != s_unmap) {
-      s_unmap = gen;
-      ClearReadableCache();
-      if (++s_clears <= 20 || s_clears % 100 == 0)
-        REXLOG_INFO("[plume] guest memory made unreadable: readable cache cleared ({} times so far)", s_clears);
+  // Research (env SPYRO_DRAWPARITY): average draws on even / odd frames, logged every 600 frames
+  // (A/B of a setting switched every other frame, e.g. SPYRO_FARCLIP_TOGGLE).
+  static const bool s_parity = std::getenv("SPYRO_DRAWPARITY") != nullptr;
+  if (s_parity) {
+    static uint64_t s_sum[2] = {};
+    s_sum[g.frame & 1] += g.draws;
+    if (g.frame % 600 == 599) {
+      REXLOG_INFO("[plume] draws per frame: even {:.1f} odd {:.1f}", s_sum[0] / 300.0, s_sum[1] / 300.0);
+      s_sum[0] = s_sum[1] = 0;
     }
   }
+  ++g.frame;
   // F9 in the game window: log every call of the next frame (same as SPYRO_PLUMEDRAWS), so a
   // player can capture a rendering bug where the test scripts can't go (WORK_LOG 112).
   {
@@ -2164,13 +2304,20 @@ void Present(uint8_t* base, uint32_t front_texture) {
     double f = std::max<uint32_t>(g_prof.frames, 1);
     REXLOG_INFO("[plume/time] {:.1f} fps | per frame: draws {:.2f} ms (textures {:.2f}, decode {:.2f} in {:.1f} "
                 "decodes, waiting for the GPU {:.2f}), submit+present {:.2f} ms, game D3D state flush {:.2f} ms, "
-                "{} draws | readable {:.2f} hash {:.2f} constants {:.2f} vertices {:.2f} record {:.2f} ms",
+                "{} draws | readable {:.2f} hash {:.2f} constants {:.2f} vertices {:.2f} (indices {:.2f}, copies "
+                "{:.2f}, packed {:.2f}; {:.1f} MB read) record {:.2f} ms",
                 g_prof.frames / elapsed, 1000 * g_prof.draw / f, 1000 * g_prof.texture / f, 1000 * g_prof.decode / f,
                 g_prof.decodes / f, 1000 * g_prof.gpu_wait / f, 1000 * g_prof.submit / f, 1000 * g_prof.flush / f,
                 g.draws,
                 1000 * g_prof.readable / f,
                 1000 * g_prof.hash / f, 1000 * g_prof.constants / f, 1000 * g_prof.vertices / f,
-                1000 * g_prof.record / f);
+                1000 * g_prof.v_index / f, 1000 * g_prof.v_copy / f, 1000 * g_prof.v_expand / f,
+                g_prof.v_bytes / f / 1e6, 1000 * g_prof.record / f);
+    VertexCache& vc = g.vertex_cache;
+    REXLOG_INFO("[plume/time] vertex cache per frame: {:.0f} reused, {:.1f} converted, {:.1f} animated; {} MB, {} "
+                "restarts",
+                vc.hits / f, vc.misses / f, vc.dynamic / f, vc.chunks.size() * (kVertexChunkSize >> 20), vc.resets);
+    vc.hits = vc.misses = vc.dynamic = 0;
     g_prof = Profile{};
   }
   s_hitch_prev = g_prof;

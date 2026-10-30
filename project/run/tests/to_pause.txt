@@ -1,0 +1,10 @@
+# Scripted pad: boot -> title -> main menu -> load the save (to_gameplay.txt), then from the
+# first gameplay frame (menu state 0x24) pause (state 0x0F) and stay there.
+# <seconds> <buttons> [hold]
+20  START   # skips the Sierra logo
+27  START   # title: "Press the START button"
+32  A       # main menu
+37  A       # -> Single Player / Two Players
+42  A       # Single Player
+47  A
+@24 6    START

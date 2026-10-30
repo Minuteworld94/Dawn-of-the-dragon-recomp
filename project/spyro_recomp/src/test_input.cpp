@@ -7,7 +7,8 @@
 // (XInputGetCapabilities).
 //
 // Script lines:  <seconds since the game first polled the pad>  <buttons>  [hold seconds, 0.15]
-//   buttons: A B X Y START BACK UP DOWN LEFT RIGHT LB RB LT RT LSU LSD LSL LSR (left stick),
+//   buttons: A B X Y START BACK UP DOWN LEFT RIGHT LB RB LT RT R3 LSU LSD LSL LSR (left stick)
+//            RSL RSR (right stick),
 //            several joined with '+', e.g. "A+LSU". '#' starts a comment.
 //   A line starting with "@<hex menu state>" counts its seconds from the first time the game is
 //   in that menu state instead (e.g. "@00 8 START" = 8 s after gameplay first starts; boot and
@@ -40,7 +41,7 @@ struct Press {
   double at, until;
   uint16_t buttons;
   uint8_t lt, rt;
-  int16_t lx, ly;
+  int16_t lx, ly, rx;
   int anchor = -1;  // menu state the times count from (-1 = script start)
 };
 
@@ -73,6 +74,9 @@ bool ParseButtons(const std::string& text, Press& p) {
     else if (b == "LSD") p.ly = -32767;
     else if (b == "LSL") p.lx = -32767;
     else if (b == "LSR") p.lx = 32767;
+    else if (b == "RSL") p.rx = -32767;
+    else if (b == "RSR") p.rx = 32767;
+    else if (b == "R3") p.buttons |= 0x0080;
     else return false;
   }
   return true;
@@ -101,7 +105,7 @@ std::vector<Press> LoadScript() {
     std::string buttons;
     if (!(ss >> at >> buttons)) continue;
     ss >> hold;
-    Press p{at, at + hold, 0, 0, 0, 0, 0, anchor};
+    Press p{at, at + hold, 0, 0, 0, 0, 0, 0, anchor};
     if (!ParseButtons(buttons, p)) {
       REXLOG_ERROR("[spyro/input] bad buttons '{}'", buttons);
       continue;
@@ -160,6 +164,8 @@ std::vector<Keystroke> BuildKeystrokes() {
   return out;
 }
 
+void MergeScript(PPCContext& ctx, uint8_t* base, uint32_t state);
+
 }  // namespace
 
 extern "C" {
@@ -196,11 +202,22 @@ REX_FUNC(sub_82412C28) {
 
 // XInputGetState wrapper (user r3, X_INPUT_STATE* r4) -> XamInputGetState(user, 1, state).
 // X_INPUT_STATE: u32 packet; u16 buttons; u8 lt, rt; s16 lx, ly, rx, ry (big-endian).
+// Also where the lock-on camera reads R3 and steers the right stick (spyro_lockon.cpp).
 REX_FUNC(sub_82412B50) {
-  const std::vector<Press>& s_script = Script();
   uint32_t user = ctx.r3.u32, state = ctx.r4.u32;
   __imp__sub_82412B50(ctx, base);
-  if (s_script.empty() || user != 0 || !state) return;
+  if (user != 0 || !state) return;
+  MergeScript(ctx, base, state);
+  if (ctx.r3.u32 == 0) spyro::LockOnPad(base, state);
+}
+
+}  // extern "C"
+
+namespace {
+
+void MergeScript(PPCContext& ctx, uint8_t* base, uint32_t state) {
+  const std::vector<Press>& s_script = Script();
+  if (s_script.empty()) return;
 
   double t = ScriptTime();
   int menu = spyro::CurrentMenuId();
@@ -208,7 +225,7 @@ REX_FUNC(sub_82412B50) {
     g_anchor_time[menu & 0xFF] = t;
     REXLOG_INFO("[spyro/input] t={:.1f}s menu state 0x{:02X} first seen", t, menu);
   }
-  Press now{0, 0, 0, 0, 0, 0, 0};
+  Press now{0, 0, 0, 0, 0, 0, 0, 0};
   for (const Press& p : s_script) {
     double t0 = p.anchor >= 0 ? g_anchor_time[p.anchor] : 0.0;
     if (t0 < 0 || t < t0 + p.at || t >= t0 + p.until) continue;
@@ -217,6 +234,7 @@ REX_FUNC(sub_82412B50) {
     if (p.rt) now.rt = p.rt;
     if (p.lx) now.lx = p.lx;
     if (p.ly) now.ly = p.ly;
+    if (p.rx) now.rx = p.rx;
   }
   if (ctx.r3.u32 != 0) std::memset(base + state, 0, 16);  // no real pad: start from nothing
   uint16_t buttons;
@@ -227,10 +245,11 @@ REX_FUNC(sub_82412B50) {
   if (now.rt) base[state + 7] = now.rt;
   if (now.lx) Store16(base, state + 8, uint16_t(now.lx));
   if (now.ly) Store16(base, state + 10, uint16_t(now.ly));
+  if (now.rx) Store16(base, state + 12, uint16_t(now.rx));
   // A new packet number whenever the merged state changes, so the game notices.
   static uint16_t s_last = 0;
   static uint32_t s_packet = 1;
-  uint16_t sig = buttons ^ uint16_t(now.lx) ^ uint16_t(now.ly << 1) ^ uint16_t(now.lt << 3);
+  uint16_t sig = buttons ^ uint16_t(now.lx) ^ uint16_t(now.ly << 1) ^ uint16_t(now.lt << 3) ^ uint16_t(now.rx << 2);
   if (sig != s_last) {
     s_last = sig;
     ++s_packet;
@@ -242,4 +261,4 @@ REX_FUNC(sub_82412B50) {
   ctx.r3.u64 = 0;  // ERROR_SUCCESS: the scripted pad is connected
 }
 
-}  // extern "C"
+}  // namespace

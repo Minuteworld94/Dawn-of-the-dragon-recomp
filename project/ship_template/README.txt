@@ -25,6 +25,11 @@ SETTINGS (resolution up to 4K, frame rate, VSync, window mode, ...)
     - in a level: pause > Options > the "Recomp Settings" plank left of "Tutorial"
   The Renderer setting takes effect the next time you start the game.
 
+EXTRAS
+  Lock-on camera: click the right stick (R3) near enemies; click again to let go.
+  Quit to Desktop: the plank at the bottom of the Game Menu and the Pause screen (press DOWN
+  from the last stone).
+
 WHERE THINGS ARE
   user\      your saves
   logs\      a log of each session (the last 10 are kept)
@@ -32,9 +37,9 @@ WHERE THINGS ARE
              (shaders not in spyro_shaders.bin are translated on first use into bin\shader_cache)
 
 KNOWN ISSUES (pre-alpha)
-  - Tested through the first two levels; later areas may still have rendering bugs.
+  - Tested through the first three levels; later areas may still have rendering bugs.
     If something looks wrong, try Renderer: Xenos (next start) and please report where.
-  - Online co-op is not there yet.
+  - Draw distance "Max" and online co-op are not there yet.
 
 REPORTING BUGS
   Please attach the newest file from the logs folder and say what you were doing.

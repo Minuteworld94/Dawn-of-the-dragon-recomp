@@ -1745,3 +1745,154 @@ NEXT STEPS (in order):
        SpyroRecomp.exe --game <folder>: 1063 translated with the bundled DLLs, title screen ok.
      - Release: zip 35.1 MB (+ DXC DLLs), repo 91 files; README/notes no longer list the shader
        cache as a known issue.
+
+[122] PUBLISHED (2026-10-27): https://github.com/Minuteworld94/Dawn-of-the-dragon-recomp
+     - Source: ship\repo pushed as commit 1fb081f (main), author Minuteworld94
+       <Minuteworld94@users.noreply.github.com> (no real email in history). Push via the portable
+       Git's Git Credential Manager; it only showed its sign-in after GCM_INTERACTIVE=always +
+       GIT_TERMINAL_PROMPT=1 (a background shell otherwise counts as non-interactive).
+       ship\repo is a git checkout now; make-ship.ps1 deletes and recreates ship\repo, so for the
+       next version clone the repository (or copy the new files over a clone) before committing.
+     - Release v0.1.0-prealpha "Pre-alpha 1" (pre-release), asset SpyroRecomp-v0.1.0-prealpha.zip
+       36,788,213 bytes = the local zip. Created by the user from a pre-filled releases/new link
+       (reading the stored GitHub credential for the REST API was blocked by the safety system).
+     - Added before publishing: .gitattributes (*.patch -text), SmartScreen note in README.txt and
+       the release notes.
+
+[123] LOCK-ON CAMERA (2026-10-28, QOL request): R3 = lock the camera onto an enemy, R3 again = off.
+     - Code: project\spyro_recomp\src\spyro_lockon.cpp; R3 read in the XInputGetState hook
+       (test_input.cpp sub_82412B50 -> spyro::LockOnPad; R3 is taken away from the game while the
+       feature is on); Recomp Settings row "Lock-on camera" (On/Off, ini key lockon_camera,
+       setting kLockOnCamera before Online co-op). kSettingStep now = 0.068*7/(rows-1) so 9 rows
+       fit above Return (screenshot checked on the main-menu Recomp Settings).
+     - Objects (constructor hooks): CKHkS08Hero init sub_82236880 (objects have vtable 0x82075B00 at
+       run time, 2 = Spyro + Cynder), CKHkS08Enemy ctor sub_821F4550 (vt 0x82074ED0, POOLED: ~10
+       objects stride 0x7C8 made at level load; dormant ones keep a spawn point), CKSrvCamera ctor
+       sub_82159458 (vt 0x8206DAD0), CKHkGolem ctor sub_82383B80 (vt 0x820814A8; in the arena level
+       it made 5 objects 0xE0 apart - probably not the boss body itself, unverified).
+     - Enemy position: +0x134 (Y up). Awake = its vtable slot 3 sub_82202D20 (shared with other Hk
+       classes, e.g. CKHkDetectorGroup) ran in the last 30 game frames; dormant pool enemies never
+       get it. Golem slot 3 = sub_82383D40.
+     - Camera service: +0x484 followed hero position, +0x550/+0x55C eye/look before collision,
+       final axes +0x574 right / +0x580 up / +0x58C forward, +0x598 eye, +0x5A4 look; copies at
+       +0x5DC.. read back from the scene node; scene node [cam+0x10]+4 = node data, matrix rows at
+       data+0x10 (w word = flags), dirty bits data+3 |= 12 and [data+0xA0]+3 |= 3 (as the end of
+       sub_8215AF68 does). Per-frame update = vtable slot 30 sub_8215AF50 -> sub_8215AF68.
+     - Feeding the right stick does NOT work: in the arena the stick did not move the camera
+       (guided/rail camera). So after the update (hook sub_8215AF50) the eye and look-at are rotated
+       around the hero so the eye sits on the far side from the target, the look-at is pulled 35%
+       toward the target, axes rebuilt (right = (f.z,0,-f.x), up = f x right - matches the game's
+       rows), eased in/out over 0.35 s. Test lk9: view yaw settles on the hero->target yaw.
+     - Lets go when: R3, target vtable changes, target not awake for 90 frames, > 100 units away.
+       Pick range 60 units, Golem preferred.
+     - Debug env: SPYRO_LOCKTRACE (yaw log), SPYRO_LOCKANY (dormant enemies count as targets - the
+       test save's arena), SPYRO_LOCKDUMP=<s>,.. (memory dumps to run\lockdump\). Test script
+       tests\lockon_turn.txt; script buttons R3 / RSL / RSR added.
+     - Not verified: real fights with the user's pad, the Golem / other bosses, camera clipping
+       into walls (the rotated eye has no collision).
+     - FIX after the user's first try ("it doesnt do anything"; log: every R3 = "no awake enemy"):
+       enemy vtable slot 3 never runs for enemies. Traced 39 enemy virtuals during an arena fight
+       (lk10): fighting enemies call slot 30 sub_82203C20 every frame (120/120), pooled dormant ones
+       never. Awake = slot 30 now (Golem: its slot 30 sub_823851E8, unverified). lk11: R3 locks on
+       without SPYRO_LOCKANY.
+     - Smoothing: in melee range (< 3.5 units) the hero->target direction flips as Spyro dodges, so
+       the wanted yaw is only updated beyond that; turn rate capped at ~200 deg/s (lk12 smooth).
+     - User test 2 (2026-10-28): works, but "movement directions get reverted" while locked (the
+       game turns the left stick with ITS camera, not the rewritten view) + wants a Dark Souls
+       style white dot on the target.
+       * Left stick turned in LockOnPad by the view's yaw change (g_stick_turn = view yaw after the
+         rewrite - game view yaw; applied as -turn: stick angle atan2(x,y) is clockwise, world yaw
+         anticlockwise); fresh packet number while turned. lk14: holding "up" while locked, Spyro
+         runs at yaw 144-145 with the view at ~150.
+       * The camera's "right" row (+0x574) points to screen LEFT (dot landed mirrored on lk13).
+       * Dot: target + 1.0 up projected with the rewritten view, FOV = cam+0x56C (80, taken as
+         horizontal for 16:9), drawn by plume's present pass: present_blit.hlsl got g_Dot /
+         g_DotRadius after g_Texture; the shared root constant b3 space4 grew from 4 to 16 bytes
+         (game shaders still use only the first word). Radius 0.0105 picture heights, white with a
+         soft dark rim. spyro::LockOnMarker() hands it over. plume only - no dot with Xenos.
+     - User test 3: lock-on also took grublins still burrowing into the arena. SPYRO_LOCKREC=1 (new)
+       records every awake enemy object each 6 frames to run\lockrec.bin; analysed with a scratch
+       script: on all 4 arena grublins +0x6A4 goes -1 -> 0 (and +0x75C gets bit 0x10000) in the
+       same frame, ~120 frames after the enemy starts updating = burrowing done. PickTarget now
+       skips CKHkS08Enemy with +0x6A4 == -1 (kEnemyInFight). lk16 (R3 every second while they
+       arrive): the first 3 presses find nothing, then it locks. Only checked when picking - a
+       locked target is not dropped if the field goes back to -1.
+
+[124] PERFORMANCE: AVALAR (2026-10-29). User: framedrops in Avalar (stage 3, open map) on RTX 3080
+     + Ryzen 9. Their log: ~28 fps, plume ~7 ms, "outside plume" ~28 ms, 175 hitches.
+     - Test save: project\run\tests\testuser_avalar = copy of the player's saves with only
+       Savegame_1 (Avalar); autotest-shots.ps1 -SaveBase testuser_avalar -InputScript
+       tests\to_gameplay.txt reaches Avalar gameplay. Baseline 720p vsync: ~39-42 fps.
+     - New: src\spyro_profiler.cpp (env SPYRO_PROFILE=<s>): samples every thread ~1 kHz
+       (Suspend/GetThreadContext/RtlVirtualUnwind), logs busy threads + top call stacks as raw
+       RVAs; the linker now writes spyrodotd.map (CMakeLists /MAP) and
+       project\analysis\profile_names.py <map> <log> ["Main thread"] names them.
+     - FOUND: 47% of the game thread was VirtualQuery called by OUR hooks (spyro_hooks.cpp
+       GuestReadable, uncached: Menu::Update hook sub_822C11E0 runs for the HUD every frame, and
+       the frame hook sub_822AAF70 does 4 checks a frame; each VirtualQuery ~1 ms on the guest's
+       huge mapping). FIX: src\guest_memory.cpp/.h spyro::GuestReadable = one cached version for
+       everyone (thread_local region map, cleared when rex::memory::UnmapGeneration changes);
+       plume, hooks and lock-on use it; plume's own cache + its clearing in Present removed.
+       -> Avalar 60 fps vsync-locked, uncapped 1440p 78-100 fps.
+     - Then plume's vertex step was ~6 ms/frame: timed parts (new [plume/time] fields indices /
+       copies / packed / MB read): packed-format decode (DEC3N normals, SHORT2N texcoords,
+       UBYTE4 ...) 4.3-5.2 ms. FIX: vertex cache in plume_renderer.cpp (VertexCache): converted
+       streams kept in 32 MB upload-heap chunks (max 8, then the cache starts over; chunks freed
+       via FrameSlot::dead_buffers after the fence), key = XXH3_64 of the guest bytes + layout
+       (stride, host stride, vcount, expands); a (source address, stream) whose hash changes 3x
+       counts as animated and is converted per frame as before; rectangle lists not cached.
+       Second [plume/time] line: reused / converted / animated per frame. Avalar: vertices
+       6 -> 1.1 ms (260 reused, ~0 converted, 2-8 animated per frame).
+       Also CopySwapped32 (SSSE3 16-byte swaps) for all big-endian copies (small gain).
+     - RESULT Avalar 1440p uncapped: 163-326 fps (was 28 in the player's session); picture checked.
+       Arena test still fine. Remaining hitches seen: level load (~95 ms: 42 new pipelines + 116
+       texture decodes) and a rare ~105 ms game-side spike (not identified).
+     - Tried and reverted: rexglue codegen register flags in spyrodotd_manifest.toml (skip_lr,
+       cr_as_local, non_volatile_as_local, ...): all on = boot hung with nothing drawn; safe
+       subset = no measurable gain. Rebuild note: after codegen changes the precompiled header
+       must be deleted (out\build\...\CMakeFiles\spyrodotd_recomp.dir\cmake_pch.*) or every
+       recomp file fails "has been modified since the precompiled header was built".
+
+[125] BLOOM / DRAW DISTANCE SETTINGS + EXIT TO DESKTOP (2026-10-30, in progress). User: "Bloom:
+     Original/Off" and "Draw distance: Original/Max" (= draw distance AND pop-in) in Recomp Settings,
+     "Exit to desktop" on the main menu and the pause screen; also "the cheetahs glow bright too".
+     - Recomp Settings now 11 rows: + Bloom (ini bloom) and Draw distance (ini draw_distance), before
+       Lock-on camera. kSettingStep = 0.068*7/(rows-1) - the 11-row layout NOT yet screenshot-checked.
+     - Bloom (plume only): frame log of Avalar (SPYRO_PLUMEDRAWS=<frame>): after the scene the HDR
+       effect copies the image (ps 20712164DDB2CC5F), bright-pass + shrink to 320x180
+       (ACEF9A3E99F0BC87), blur (973D060822453192), then ADDS it onto the picture (ps
+       DFE8E11EEC4D610A, blend 0x01060106). Bloom Off = that add is skipped (Draw, kBloomAddShader).
+       Checked: Avalar with bloom=1 has no glow haze. Cheetah glow: probably this; not checked yet.
+     - Draw distance: camera input +0x568 (100-150; copied to the view's far value each update) does
+       NOT change what is drawn (SPYRO_FARCLIP=2000 with SPYRO_FARCLIP_TOGGLE every other frame +
+       SPYRO_DRAWPARITY: same draws per frame). Engine classes seen: CKQuadtree / CKQuadTreeLeaf,
+       CKMeshKluster, CMultiGeometryBasic (LOD?), CSGBkgRootNode, CKDOFNodeFx. Culling/LOD distance
+       not found yet - the setting does nothing so far.
+     - Fixes on the way: the plume draw log read the first vertices from the upload buffer, which
+       is empty for streams from the vertex cache -> crash when logging a frame (F9 too); fixed.
+       SPYRO_PLUMEDRAWS_AT now logs the whole NEXT frame (it started mid-frame).
+     - Exit to Desktop: menu state 0x06 (vt 0x82079920, 6 rows) is the "Game Menu"/"Pause" screen
+       (Continue Story Mode, Chapter, Bonus, Options, Back to main menu - or the in-level arc
+       Single Player, Moves, Armor, Elements, Options, Quit level); "Main Menu" = New game / Load
+       game. Tried: a 7th arc row (copy of row 5, BuildExitRow/PlaceExitRow, destructor hooks
+       sub_822DD210 / sub_822E0F38 restore the row list) -> built, but loading a save then crashed
+       (guest read 0x3FFFD7B5 leaving state 0x23). Disabled (env SPYRO_EXITARC to try again).
+       User's choice instead (screenshot): a stone-PLANK button like the pause-Options Recomp
+       Settings one, bottom left of "A Accept" on the Game Menu. ExitToDesktop() (WM_CLOSE to the
+       game window) and the SendRowEvent press check are in place for whatever row it becomes.
+     - Tools: autotest-shots.ps1 -Set "bloom=1","draw_distance=1" (extra settings lines);
+       tests\to_pause.txt, to_pause_exit.txt, to_main_exit.txt.
+     - QUIT TO DESKTOP PLANK (done, user-tested): QuitPlank in spyro_hooks.cpp. Not a menu row:
+       copies of the pause Options' Sound Options plank (+0x3C) and label (+0x34) - the Recomp
+       Settings look - linked into the Game Menu (state 0x06, vt 0x82079920) / Pause (0x0F, vt
+       0x8207A4A0) screen's own scene (scene of row 5's sprite +0x3C), at kQuitPlankPos (Game Menu
+       0.55,0.125; Pause 0.67,0.16; x right / y up) where the user marked it, left of "A Accept"
+       (user: "fine where it is"). The pause Options object (manager slot 0x17) exists in the
+       main-menu set too, so both screens find the plank. Selection: direction hook sub_822C2DC0 -
+       DOWN on the bottom stone (its down neighbour <= itself) selects the plank (stone sent event
+       0, plank 1.12x), UP goes back (event 2), other directions swallowed; SendRowEvent event 1
+       while selected = ExitToDesktop() (WM_CLOSE to the game window; log "Title terminated").
+       Shown with the screen's pieces (flag bit 1 copied from the ref sprite) and hidden every game
+       frame while another menu is current (HideQuitPlanks in the frame hook) - the user saw an
+       unselectable copy stay in other menus before that. Forgotten in the menu destructor hooks.
+       Direction codes confirmed: 0 up, 1 down.

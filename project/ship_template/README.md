@@ -6,7 +6,7 @@ A native Windows PC port of **The Legend of Spyro: Dawn of the Dragon** (Xbox 36
 Graphics run on **plume**, our own Direct3D 12 renderer that replaces the game's Xbox 360 Direct3D
 layer, instead of emulating the Xbox 360 GPU.
 
-> **Pre-alpha.** It boots, plays and has been played through the first two levels. Expect bugs.
+> **Pre-alpha.** It boots, plays and has been played through the first three levels. Expect bugs.
 > Bug reports with the newest file from the `logs` folder are very welcome.
 
 **You need your own copy of the game.** This project contains no game files. It works with the
@@ -39,9 +39,20 @@ PC settings live inside the game's own menus, under **Recomp Settings**:
 | Display mode | Windowed, Borderless, Fullscreen |
 | Motion blur | On, Off |
 | Anti-aliasing | Off, FXAA, FXAA Extreme |
+| Bloom | Original, Off (plume renderer) |
+| Draw distance | Original (Max coming later) |
+| Lock-on camera | On, Off |
 | Online co-op | coming later |
 
 Settings are saved in `bin\recomp_settings.ini`, saves in `user`, logs in `logs`.
+
+### Extras
+
+- **Lock-on camera**: click the right stick (R3) near enemies to lock the camera onto the nearest
+  one (a white dot marks it); click again to let go. Turn it off in Recomp Settings to give R3
+  back to the game.
+- **Quit to Desktop**: a plank at the bottom of the Game Menu and the Pause screen - press DOWN
+  from the last stone to select it.
 
 ### Shaders
 
@@ -52,8 +63,8 @@ each, on background threads) and kept in `bin\shader_cache`, so it is only done 
 
 ### Known issues
 
-- Gameplay has been tested through the first two levels; later areas may still have rendering bugs.
-- Online co-op is not implemented yet.
+- Gameplay has been tested through the first three levels; later areas may still have rendering bugs.
+- Draw distance (Max) and online co-op are not implemented yet.
 - Only the USA/Europe release has been tested; the launcher warns about other versions.
 
 ## Building from source

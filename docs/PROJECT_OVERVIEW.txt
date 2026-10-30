@@ -270,3 +270,15 @@ renderer. Next big item: translate missing shaders at runtime (cache covers leve
 SHADERS (2026-10-27, WORK_LOG 121): shaders missing from spyro_shaders.bin are translated by the
 game at runtime (src\shader_translator.cpp + dxcompiler.dll) into shader_cache\. The game creates
 all ~1063 shaders at boot. Release zip 35.1 MB.
+PUBLISHED (2026-10-27, WORK_LOG 122): https://github.com/Minuteworld94/Dawn-of-the-dragon-recomp,
+release v0.1.0-prealpha.
+LOCK-ON CAMERA (2026-10-28, WORK_LOG 123, QOL): R3 locks the camera onto the nearest awake enemy
+(no switching; R3 again lets go); Recomp Settings row "Lock-on camera" On/Off (9 setting rows now).
+Code: project\spyro_recomp\src\spyro_lockon.cpp (camera result rewritten after CKSrvCamera's
+per-frame update), left stick turned with the view, white target dot (plume), skips enemies
+still spawning in. User tested 2026-10-28: "works pretty nice ... useful if not janky", wants
+more polish later (not specified yet). Bosses (Golem) and wall clipping not verified.
+PERFORMANCE (2026-10-29, WORK_LOG 124): Avalar 28 fps -> 163-326 fps at 1440p uncapped. Causes:
+uncached VirtualQuery in our hooks (now src\guest_memory.cpp for everyone) and per-frame CPU
+decode of packed vertex formats (now plume's vertex cache). Profiler: env SPYRO_PROFILE=<s> +
+project\analysis\profile_names.py with out\build\...\spyrodotd.map.

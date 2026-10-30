@@ -1,0 +1,13 @@
+# Quit to Desktop on the in-level Pause screen (WORK_LOG 125): load the save, pause (state 0x0F),
+# UP (wraps from the first stone to the bottom one), DOWN = the plank, A = the game closes.
+# <seconds> <buttons> [hold]
+20  START   # skips the Sierra logo
+27  START   # title: "Press the START button"
+32  A       # main menu
+37  A
+42  A
+47  A
+@24 6    START
+@0F 3    UP
+@0F 5    DOWN
+@0F 10   A

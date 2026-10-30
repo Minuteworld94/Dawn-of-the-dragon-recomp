@@ -24,6 +24,9 @@ const SettingDef kDefs[kNumSettings] = {
     {"display_mode", u"Display mode", {u"Windowed", u"Borderless", u"Fullscreen"}, 3, 0},
     {"motion_blur", u"Motion blur", {u"On", u"Off"}, 2, 0},
     {"anti_aliasing", u"Anti-aliasing", {u"Off", u"FXAA", u"FXAA Extreme"}, 3, 0},
+    {"bloom", u"Bloom", {u"Original", u"Off"}, 2, 0},                  // plume_renderer.cpp
+    {"draw_distance", u"Draw distance", {u"Original", u"Max - soon"}, 2, 0},  // not hooked up yet
+    {"lockon_camera", u"Lock-on camera", {u"On", u"Off"}, 2, 0},  // spyro_lockon.cpp
     {"online_coop", u"Online co-op", {u"Off", u"On - soon"}, 2, 0},
 };
 

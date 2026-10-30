@@ -22,10 +22,13 @@ enum SettingId {
   kDisplayMode,
   kMotionBlur,
   kAntiAliasing,
+  kBloom,         // 0 = Original, 1 = Off (plume skips the bloom pass, WORK_LOG 125)
+  kDrawDistance,  // 0 = Original, 1 = Max (WORK_LOG 125)
+  kLockOnCamera,  // 0 = On (R3 toggles the lock), 1 = Off (R3 goes to the game)
   kOnlineCoop,
 };
 
-constexpr int kNumSettings = 8;
+constexpr int kNumSettings = 11;
 constexpr int kMaxValues = 4;
 
 struct SettingDef {
@@ -61,5 +64,12 @@ float ResolutionScale();
 // The game's current menu state id (0x00 = gameplay, 0x06 = pause, ...; -1 before the menus
 // exist). Updated every game frame by spyro_hooks.cpp; read by the test pad script.
 int CurrentMenuId();
+
+// Lock-on camera (spyro_lockon.cpp): once per game frame, and on every successful read of
+// controller 1 (X_INPUT_STATE at guest address state) - R3 toggles, the right stick steers.
+void LockOnFrame(uint8_t* base);
+void LockOnPad(uint8_t* base, uint32_t state);
+// Where to draw the lock-on target dot: 0..1 across the game's 16:9 picture (false = none).
+bool LockOnMarker(float& x, float& y);
 
 }  // namespace spyro

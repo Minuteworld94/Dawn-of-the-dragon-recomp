@@ -35,6 +35,7 @@
 #include <windows.h>
 #endif
 
+#include "guest_memory.h"
 #include "spyro_settings.h"
 
 namespace {
@@ -42,20 +43,9 @@ namespace {
 // --- guest memory helpers --------------------------------------------------------------------
 
 // True when [addr, addr+len) of guest memory is committed and readable on the host, so a debug
-// dump can't fault on a bad pointer.
+// dump can't fault on a bad pointer (cached: guest_memory.cpp).
 bool GuestReadable(const uint8_t* base, uint32_t addr, uint32_t len) {
-  if (addr < 0x00010000u || len == 0) return false;
-#if defined(_WIN32)
-  MEMORY_BASIC_INFORMATION mbi{};
-  const uint8_t* p = base + addr;
-  if (!VirtualQuery(p, &mbi, sizeof(mbi))) return false;
-  if (mbi.State != MEM_COMMIT) return false;
-  if (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) return false;
-  const uint8_t* region_end = static_cast<const uint8_t*>(mbi.BaseAddress) + mbi.RegionSize;
-  return p + len <= region_end;
-#else
-  return true;
-#endif
+  return addr >= 0x00010000u && spyro::GuestReadable(base, addr, len);
 }
 
 uint32_t Load32(const uint8_t* base, uint32_t addr) {
@@ -714,7 +704,8 @@ using spyro::SettingDef;
 // Gamma, then one row every kSettingStep downwards; arrows pushed this much further out so
 // longer values ("Borderless") fit between them.
 constexpr float kSettingsTop = 0.18f;
-constexpr float kSettingStep = 0.068f;  // 8 rows fit above the Return button
+// The rows share the space 8 rows at 0.068 used to fill (down to just above the Return button).
+constexpr float kSettingStep = 0.068f * 7 / (kNumSettings - 1);
 constexpr float kArrowGapExtra = 0.16f;  // right arrow this much further right than Gamma's
 // Value text centring (calibrated on screenshots, WORK_LOG 96): the value text is RIGHT-aligned
 // and its right edge sits kTextRightOffset right of the arrows' centre when x = that centre;
@@ -753,6 +744,9 @@ bool g_settings_built = false;
 // (g_settings_anchor_y = the Gamma label's y).
 float g_settings_anchor_y = -1.0f;
 float g_host_dy = 0.0f;
+// A game text source (CKLocTextAccessor) + its CKStdText, from the Gamma label: MakeGameText
+// copies them for our own texts.
+uint32_t g_text_template[2] = {0, 0};
 
 // A text the game can show: CKLocTextAccessor (copy of `gsource`) -> CKStdText (copy of
 // `gstd`) -> our UTF-16BE buffer (kLabelChars). Returns the accessor; *str_out = the buffer.
@@ -836,6 +830,8 @@ bool BuildSettingsRows(PPCContext& ctx, uint8_t* base, uint32_t gamma) {
   uint32_t gstd = Load32(base, gsource + 0x04) ? Load32(base, Load32(base, gsource + 0x04))
                                                  : Load32(base, gsource + 0x10);
   if (!GuestReadable(base, gstd, 0x40)) return false;
+  g_text_template[0] = gsource;  // for texts made elsewhere (Exit to Desktop on the main menu)
+  g_text_template[1] = gstd;
 
   for (int i = 0; i < kNumSettings; ++i) {
     const SettingDef& def = spyro::Def(i);
@@ -1524,6 +1520,334 @@ void PlaceInGameOptionsRow(PPCContext& ctx, uint8_t* base) {
   }
 }
 
+// ===== "Exit to Desktop" on the main menu and the in-level pause menu (WORK_LOG 125) ==========
+//
+// Both screens are an arc of stone buttons (CKInterfaceButton): Single Player, Moves, Armor,
+// Elements, Options, Quit level (row 5). We append a 7th stone after Quit level: a copy of that
+// row (0x3C0) with copies of its three sprites (+0x38 / +0x3C / +0x40), its own hotspot and a
+// CText2d label "Exit to Desktop" (the pause menu's rows have labels at +0x34 - Quit level's is
+// copied; the main menu's are drawn by the menu movie, so its first row's label is copied). Each
+// frame the copies sit one arc step past Quit level (the step from Elements... Options -> Quit
+// level), following the menu's slide-in. Pressing it closes the game window (the normal exit).
+// Like the Display Options row, the copy SHARES Quit level's per-state heap arrays: the menu
+// destructor hooks put the original row list back first, so it is never destroyed.
+constexpr uint32_t kMainMenuVtable = 0x82079920, kPauseMenuVtable = 0x8207A4A0;
+constexpr uint32_t kQuitRow = 5;
+constexpr uint32_t kButtonSize = 0x3C0;
+
+struct ExitRow {
+  uint32_t menu = 0, tried = 0, row = 0, index = 0;
+  uint32_t src = 0, prev = 0;  // Quit level and the row before it (one arc step)
+  uint32_t pieces[4] = {};     // our label, our copies of the three sprites
+  uint32_t sources[4] = {};    // what each copies: Quit level's label (pause menu only), sprites
+  uint32_t prevs[4] = {};      // the same pieces of the row before Quit level
+  uint32_t visible = 0xFFFFFFFF;
+};
+ExitRow g_exit[2];  // [0] main menu, [1] in-level pause menu
+struct ExitRestore {
+  uint32_t menu, rows, cap, count;
+};
+std::vector<ExitRestore> g_exit_restore;  // every menu object we changed: its original row list
+
+void ExitToDesktop() {
+  REXLOG_INFO("[spyro/menu] Exit to Desktop");
+#if defined(_WIN32)
+  // The game window (any visible top-level window of this process): WM_CLOSE = the user closing it.
+  HWND found = nullptr;
+  EnumWindows(
+      [](HWND h, LPARAM p) -> BOOL {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(h, &pid);
+        if (pid != GetCurrentProcessId() || !IsWindowVisible(h) || GetWindow(h, GW_OWNER)) return TRUE;
+        *reinterpret_cast<HWND*>(p) = h;
+        return FALSE;
+      },
+      reinterpret_cast<LPARAM>(&found));
+  if (found) PostMessageW(found, WM_CLOSE, 0, 0);
+  else std::exit(0);
+#else
+  std::exit(0);
+#endif
+}
+
+bool BuildExitRow(PPCContext& ctx, uint8_t* base, uint32_t menu, ExitRow& e, bool pause) {
+  auto fail = [&](const char* why) {
+    REXLOG_INFO("[spyro/menu] menu 0x{:08X}: no Exit to Desktop yet ({})", menu, why);
+    return false;
+  };
+  uint32_t rows = Load32(base, menu + 0x84), count = Load32(base, menu + 0x8C);
+  uint32_t want = pause ? 7 : 6;
+  if (count != want || !GuestReadable(base, rows, count * 4)) return fail("row count");
+  uint32_t src = Load32(base, rows + kQuitRow * 4), prev = Load32(base, rows + (kQuitRow - 1) * 4);
+  uint32_t first = Load32(base, rows);
+  if (!GuestReadable(base, src, kButtonSize) || !GuestReadable(base, prev, kButtonSize) ||
+      !GuestReadable(base, first, 0x44) || Load32(base, src) != kButtonVtable || Load32(base, prev) != kButtonVtable)
+    return fail("Quit level row");
+  uint32_t slabel = pause ? Load32(base, src + 0x34) : Load32(base, first + 0x34);
+  if (!GuestReadable(base, slabel, kText2dSize) || Load32(base, slabel) != kText2dVtable) return fail("label");
+  uint32_t scene = Load32(base, slabel + 0x08), gsource = Load32(base, slabel + 0x73C);
+  if (!GuestReadable(base, scene, 0x28)) return fail("label scene");
+  uint32_t gstd = 0;
+  if (GuestReadable(base, gsource, 0x14)) {
+    uint32_t ind = Load32(base, gsource + 0x04);
+    gstd = ind ? (GuestReadable(base, ind, 4) ? Load32(base, ind) : 0) : Load32(base, gsource + 0x10);
+  }
+  if (!GuestReadable(base, gstd, 0x40)) {  // the main menu's label: use the Gamma label's kind
+    gsource = g_text_template[0];
+    gstd = g_text_template[1];
+    if (!GuestReadable(base, gsource, 0x14) || !GuestReadable(base, gstd, 0x40)) return fail("label text");
+  }
+  uint32_t shot = Load32(base, src + 0x2C);
+  uint32_t sentries = Load32(base, shot + 0x10), scount = Load32(base, shot + 0x18);
+  if (!GuestReadable(base, shot, 0x40) || scount == 0 || scount > 8 || !GuestReadable(base, sentries, scount * 0x10))
+    return fail("hotspot");
+
+  uint32_t accessor = MakeGameText(ctx, base, gsource, gstd, u"Exit to Desktop");
+  uint32_t label = accessor ? CloneText2d(ctx, base, scene, slabel, accessor) : 0;
+  uint32_t row = GuestCall(ctx, base, sub_8260DC40, kButtonSize);
+  uint32_t hot = GuestCall(ctx, base, sub_8260DC40, 0x40);
+  uint32_t entries = GuestCall(ctx, base, sub_8260DC40, scount * 0x10);
+  uint32_t list = GuestCall(ctx, base, sub_8260DC40, (count + 1) * 4);
+  if (!label || !row || !hot || !entries || !list) return false;
+  uint32_t sb[3], pb[3], bill[3] = {0, 0, 0};
+  for (int b = 0; b < 3; ++b) {
+    sb[b] = Load32(base, src + 0x38 + 4 * b);
+    pb[b] = Load32(base, prev + 0x38 + 4 * b);
+    if (GuestReadable(base, sb[b], kBillboardSize))
+      bill[b] = CloneBillboard(ctx, base, Load32(base, sb[b] + 0x08), sb[b], sb[b]);
+  }
+
+  std::memcpy(base + row, base + src, kButtonSize);
+  std::memcpy(base + hot, base + shot, 0x40);
+  Store32(base, hot + 0x04, 0);
+  Store32(base, hot + 0x0C, 0);
+  std::memcpy(base + entries, base + sentries, scount * 0x10);
+  uint32_t src_label = Load32(base, src + 0x34);
+  for (uint32_t i = 0; i < scount; ++i) {
+    uint32_t p = Load32(base, entries + i * 0x10);
+    if (p && p == src_label) p = label;
+    for (int b = 0; b < 3; ++b)
+      if (p && p == sb[b]) p = bill[b];
+    Store32(base, entries + i * 0x10, p);
+  }
+  Store32(base, hot + 0x10, entries);
+  Store32(base, row + 0x2C, hot);
+  Store32(base, row + 0x34, label);
+  for (int b = 0; b < 3; ++b) Store32(base, row + 0x38 + 4 * b, bill[b]);
+  for (uint32_t s = 0; s < 5; ++s) Store32(base, row + 0x90 + 0xA0 * s + 0x04, accessor);
+
+  // Neighbours (+4 up, +5 down, +6 left, +7 right): ours between Quit level and what came after it.
+  uint32_t index = count;
+  uint8_t after = base[src + 5];
+  base[row + 4] = base[row + 6] = uint8_t(kQuitRow);
+  base[row + 5] = base[row + 7] = after;
+  base[src + 5] = base[src + 7] = uint8_t(index);
+  if (after < count) {
+    uint32_t a = Load32(base, rows + after * 4);
+    if (GuestReadable(base, a, 8)) {
+      if (base[a + 4] == kQuitRow) base[a + 4] = uint8_t(index);
+      if (base[a + 6] == kQuitRow) base[a + 6] = uint8_t(index);
+    }
+  }
+  std::memcpy(base + list, base + rows, count * 4);
+  Store32(base, list + count * 4, row);
+  g_exit_restore.push_back({menu, rows, Load32(base, menu + 0x88), count});
+  Store32(base, menu + 0x84, list);
+  Store32(base, menu + 0x88, count + 1);
+  Store32(base, menu + 0x8C, count + 1);
+
+  e = ExitRow{};
+  e.menu = e.tried = menu;
+  e.row = row;
+  e.index = index;
+  e.src = src;
+  e.prev = prev;
+  uint32_t pieces[4] = {label, bill[0], bill[1], bill[2]};
+  uint32_t sources[4] = {pause ? src_label : 0, sb[0], sb[1], sb[2]};
+  uint32_t prevs[4] = {pause ? Load32(base, prev + 0x34) : 0, pb[0], pb[1], pb[2]};
+  std::memcpy(e.pieces, pieces, sizeof(pieces));
+  std::memcpy(e.sources, sources, sizeof(sources));
+  std::memcpy(e.prevs, prevs, sizeof(prevs));
+  REXLOG_INFO("[spyro/menu] {} 0x{:08X}: Exit to Desktop is row {} (label 0x{:08X})", pause ? "pause menu" : "main menu",
+              menu, index, label);
+  return true;
+}
+
+// Per frame while the menu updates: our pieces one arc step past Quit level, its look copied.
+void PlaceExitRow(PPCContext& ctx, uint8_t* base, ExitRow& e) {
+  auto pos = [&](uint32_t p, float& x, float& y) {
+    if (!p || !GuestReadable(base, p, 0x20)) return false;
+    x = LoadF32(base, p + 0x14);
+    y = LoadF32(base, p + 0x18);
+    return true;
+  };
+  float ax = 0, ay = 0;  // where the main sprite (+0x3C, the stone) goes: the label follows it
+  for (int i = 1; i < 4; ++i) {
+    float sx, sy, px, py;
+    uint32_t ours = e.pieces[i], src = e.sources[i];
+    if (!ours || !pos(src, sx, sy) || !pos(e.prevs[i], px, py)) continue;
+    float x = sx + (sx - px), y = sy + (sy - py);
+    Store32F(base, ours + 0x14, x);
+    Store32F(base, ours + 0x18, y);
+    if (i == 2) ax = x, ay = y;
+    // Same look as Quit level's sprite (its render records are filled late - WORK_LOG 114).
+    uint32_t s2c = Load32(base, src + 0x2C), s30 = Load32(base, src + 0x30);
+    uint32_t d2c = Load32(base, ours + 0x2C), d30 = Load32(base, ours + 0x30);
+    if (GuestReadable(base, s2c, 0x1C) && GuestReadable(base, d2c, 0x1C)) std::memcpy(base + d2c, base + s2c, 0x1C);
+    if (GuestReadable(base, s30, 0x80) && GuestReadable(base, d30, 0x80)) std::memcpy(base + d30, base + s30, 0x80);
+  }
+  uint32_t label = e.pieces[0];
+  float lx, ly, px, py;
+  if (e.sources[0] && pos(e.sources[0], lx, ly) && pos(e.prevs[0], px, py)) {
+    Store32F(base, label + 0x14, lx + (lx - px));
+    Store32F(base, label + 0x18, ly + (ly - py));
+  } else if (ax != 0 || ay != 0) {
+    Store32F(base, label + 0x14, ax);
+    Store32F(base, label + 0x18, ay);
+  }
+  uint32_t visible = base[label + 5];
+  if (visible != e.visible) {
+    e.visible = visible;
+    GuestCallWithString(ctx, base, sub_8211B368, label + 0x28, u"Exit to Desktop");
+  }
+}
+
+// Menu destructors: put the original row list back (our row shares Quit level's arrays).
+void RestoreExitRows(uint8_t* base, uint32_t menu) {
+  for (auto it = g_exit_restore.begin(); it != g_exit_restore.end(); ++it) {
+    if (it->menu != menu) continue;
+    Store32(base, menu + 0x84, it->rows);
+    Store32(base, menu + 0x88, it->cap);
+    Store32(base, menu + 0x8C, it->count);
+    g_exit_restore.erase(it);
+    for (ExitRow& e : g_exit)
+      if (e.menu == menu) e = ExitRow{};
+    return;
+  }
+}
+
+// ===== "Quit to Desktop" plank on the Pause and Game Menu screens (WORK_LOG 125) ==============
+//
+// Not a row of the menu (adding one broke loading a save): a copy of the pause Options' stone
+// plank and its label (the Recomp Settings look), linked into the screen's own scene at the spot
+// the user marked (bottom, left of "A Accept"). DOWN on the bottom stone selects it (the stone
+// dims, the plank grows), UP goes back, A closes the game.
+constexpr uint8_t kQuitScreenIds[2] = {0x06, 0x0F};  // Game Menu, in-level Pause
+constexpr float kQuitPlankPos[2][2] = {{0.55f, 0.125f}, {0.67f, 0.16f}};  // x right, y up (0..1)
+constexpr float kQuitPlankScale = 1.0f;  // of the pause Options plank (user: fine as it is)
+constexpr float kQuitSelectedScale = 1.12f;
+
+struct QuitPlank {
+  uint32_t menu = 0, tried = 0, label = 0, plank = 0, src_plank = 0, ref = 0;  // ref: a piece of the screen
+  uint32_t bottom = 0xFF;  // the stone it was selected from
+  bool selected = false;
+  uint32_t visible = 0xFFFFFFFF;
+  float scale[2] = {1, 1};
+};
+QuitPlank g_quit[2];
+
+// The pause Options object (state 0x17) of the current menu set, if the manager has one.
+uint32_t InGameOptionsObject(uint8_t* base) {
+  if (!g_manager || !GuestReadable(base, g_manager + kStateArray, 0x25 * 4)) return 0;
+  uint32_t o = Load32(base, g_manager + kStateArray + kInGameOptionsId * 4);
+  return GuestReadable(base, o, 0xB8) && Load32(base, o) == kInGameOptionsVtable ? o : 0;
+}
+
+bool BuildQuitPlank(PPCContext& ctx, uint8_t* base, uint32_t menu, QuitPlank& q) {
+  auto fail = [&](const char* why) {
+    REXLOG_INFO("[spyro/menu] menu 0x{:08X}: no Quit to Desktop yet ({})", menu, why);
+    return false;
+  };
+  uint32_t rows = Load32(base, menu + 0x84), count = Load32(base, menu + 0x8C);
+  if (count < 6 || !GuestReadable(base, rows, count * 4)) return fail("rows");
+  // A piece of this screen (its scene; our pieces are linked next to it): row 5's main sprite.
+  uint32_t r5 = Load32(base, rows + 5 * 4);
+  uint32_t ref = GuestReadable(base, r5, 0x44) ? Load32(base, r5 + 0x3C) : 0;
+  if (!GuestReadable(base, ref, kBillboardSize)) return fail("screen piece");
+  uint32_t scene = Load32(base, ref + 0x08);
+  if (!GuestReadable(base, scene, 0x28)) return fail("scene");
+  // The plank and label to copy: pause Options' Sound Options row (as for Recomp Settings).
+  uint32_t opt = InGameOptionsObject(base);
+  if (!opt || Load32(base, opt + 0x8C) < kIgoSound + 1) return fail("pause Options not loaded");
+  uint32_t sound = Load32(base, Load32(base, opt + 0x84) + kIgoSound * 4);
+  if (!GuestReadable(base, sound, kButtonSize)) return fail("Sound Options row");
+  uint32_t slabel = Load32(base, sound + 0x34), splank = Load32(base, sound + 0x3C);
+  if (!GuestReadable(base, slabel, kText2dSize) || Load32(base, slabel) != kText2dVtable ||
+      !GuestReadable(base, splank, kBillboardSize))
+    return fail("plank / label");
+  uint32_t gsource = Load32(base, slabel + 0x73C);
+  uint32_t gstd = 0;
+  if (GuestReadable(base, gsource, 0x14)) {
+    uint32_t ind = Load32(base, gsource + 0x04);
+    gstd = ind ? (GuestReadable(base, ind, 4) ? Load32(base, ind) : 0) : Load32(base, gsource + 0x10);
+  }
+  if (!GuestReadable(base, gstd, 0x40)) {
+    gsource = g_text_template[0];
+    gstd = g_text_template[1];
+    if (!GuestReadable(base, gsource, 0x14) || !GuestReadable(base, gstd, 0x40)) return fail("text");
+  }
+  uint32_t accessor = MakeGameText(ctx, base, gsource, gstd, u"Quit to Desktop");
+  uint32_t plank = accessor ? CloneBillboard(ctx, base, scene, splank, ref) : 0;
+  uint32_t label = plank ? GuestCall(ctx, base, sub_8260DC40, kText2dSize) : 0;
+  if (!label) return fail("allocation");
+  // The label copy goes into THIS screen's scene, drawn right after the plank.
+  std::memcpy(base + label, base + slabel, kText2dSize);
+  Store32(base, label + 0x73C, accessor);
+  Store32(base, label + 0x740, 0);
+  Store32(base, label + 0x744, 0);
+  InsertPieceBefore(base, scene, label, ref);  // draw order: plank, label, the screen's sprite
+  Store32(base, plank + 0x08, scene);
+  Store32(base, label + 0x08, scene);
+
+  q = QuitPlank{};
+  q.menu = q.tried = menu;
+  q.label = label;
+  q.plank = plank;
+  q.src_plank = splank;
+  q.ref = ref;
+  q.scale[0] = LoadF32(base, plank + 0x20);
+  q.scale[1] = LoadF32(base, plank + 0x24);
+  REXLOG_INFO("[spyro/menu] menu 0x{:08X}: Quit to Desktop plank 0x{:08X} label 0x{:08X}", menu, plank, label);
+  return true;
+}
+
+void PlaceQuitPlank(PPCContext& ctx, uint8_t* base, QuitPlank& q, int k) {
+  float x = kQuitPlankPos[k][0], y = kQuitPlankPos[k][1];
+  for (uint32_t p : {q.plank, q.label}) {
+    Store32F(base, p + 0x14, x);
+    Store32F(base, p + 0x18, y);
+    // Shown exactly when the screen's own pieces are (flag bit 1).
+    base[p + 5] = uint8_t((base[p + 5] & ~2u) | (base[q.ref + 5] & 2u));
+  }
+  float grow = kQuitPlankScale * (q.selected ? kQuitSelectedScale : 1.0f);
+  Store32F(base, q.plank + 0x20, q.scale[0] * grow);
+  Store32F(base, q.plank + 0x24, q.scale[1] * grow);
+  // The plank's look follows the source plank's live render records (filled late, WORK_LOG 114).
+  uint32_t s2c = Load32(base, q.src_plank + 0x2C), s30 = Load32(base, q.src_plank + 0x30);
+  uint32_t d2c = Load32(base, q.plank + 0x2C), d30 = Load32(base, q.plank + 0x30);
+  if (GuestReadable(base, s2c, 0x1C) && GuestReadable(base, d2c, 0x1C)) std::memcpy(base + d2c, base + s2c, 0x1C);
+  if (GuestReadable(base, s30, 0x80) && GuestReadable(base, d30, 0x80)) std::memcpy(base + d30, base + s30, 0x80);
+  uint32_t visible = base[q.label + 5];
+  if (visible != q.visible) {
+    q.visible = visible;
+    GuestCallWithString(ctx, base, sub_8211B368, q.label + 0x28, u"Quit to Desktop");
+  }
+}
+
+// Every game frame: a plank whose screen is not the current menu is hidden (its screen stops
+// updating when another menu opens, so PlaceQuitPlank can't hide it - the user saw it stay).
+void HideQuitPlanks(uint8_t* base) {
+  if (!g_manager || !GuestReadable(base, g_manager + 0xAC0, 0x20)) return;
+  uint8_t id = base[g_manager + 0xACD];
+  for (int k = 0; k < 2; ++k) {
+    QuitPlank& q = g_quit[k];
+    if (!q.menu || id == kQuitScreenIds[k]) continue;
+    q.selected = false;
+    for (uint32_t p : {q.plank, q.label})
+      if (GuestReadable(base, p, 8)) base[p + 5] &= ~2u;
+  }
+}
+
 void RequestMenu(uint8_t* base, uint8_t id);
 
 // The host screen's title (a CText2d near the top of its scene reading "Display Options" or
@@ -1770,6 +2094,42 @@ REX_FUNC(sub_822C11E0) {
     }
     if (menu == g_igo.menu) PlaceInGameOptionsRow(ctx, base);
   }
+  // Quit to Desktop plank on the Game Menu / Pause screens: built once per menu object (tried for
+  // a while: the pause Options it copies from may load later), placed every frame.
+  for (int k = 0; k < 2; ++k) {
+    if (Load32(base, menu) != (k ? kPauseMenuVtable : kMainMenuVtable)) continue;
+    QuitPlank& q = g_quit[k];
+    static uint32_t s_tries[2] = {0, 0};
+    if (menu != q.tried) {
+      q.tried = menu;
+      s_tries[k] = 0;
+    }
+    if (menu != q.menu && s_tries[k] < 600 && (s_tries[k]++ % 60) == 0) BuildQuitPlank(ctx, base, menu, q);
+    if (menu == q.menu) {
+      bool current = g_manager && GuestReadable(base, g_manager + 0xAC0, 0x20) && base[g_manager + 0xACD] == kQuitScreenIds[k];
+      if (!current) q.selected = false;
+      PlaceQuitPlank(ctx, base, q, k);
+    }
+  }
+  // Exit to Desktop as a 7th arc stone: OFF - with the extra row the game crashed loading a save
+  // (guest read of 0x3FFFD7B5 leaving state 0x23), and the user wants a plank button instead.
+  static const bool s_exit_arc = std::getenv("SPYRO_EXITARC") != nullptr;
+  for (int k = 0; k < 2 && s_exit_arc; ++k) {
+    if (Load32(base, menu) != (k ? kPauseMenuVtable : kMainMenuVtable)) continue;
+    ExitRow& e = g_exit[k];
+    // Tried on each of the first frames (the rows may still be coming), then given up.
+    static uint32_t s_tries[2] = {0, 0};
+    if (menu != e.tried) {
+      e.tried = menu;
+      s_tries[k] = 0;
+    }
+    if (menu != e.menu && s_tries[k] < 30) {
+      ++s_tries[k];
+      bool ok = BuildExitRow(ctx, base, menu, e, k == 1);
+      if (ok) e.tried = menu;
+    }
+    if (menu == e.menu) PlaceExitRow(ctx, base, e);
+  }
   // Log every change of the game manager's current menu id (WORK_LOG 92).
   if (g_manager) {
     uint32_t mgr = g_manager;
@@ -1908,6 +2268,8 @@ REX_FUNC(sub_822C11E0) {
 
 REX_EXTERN(__imp__sub_822E0C90);
 REX_EXTERN(__imp__sub_822E0BE0);
+REX_EXTERN(__imp__sub_822DD210);  // main menu destructor (vt 0x82079920 slot 0)
+REX_EXTERN(__imp__sub_822E0F38);  // in-level pause menu destructor (vt 0x8207A4A0 slot 0)
 REX_EXTERN(__imp__sub_822C2DC0);
 REX_EXTERN(__imp__sub_822ACFC0);
 REX_EXTERN(__imp__sub_822AAF70);
@@ -1932,7 +2294,9 @@ REX_FUNC(sub_822E92A0) {
 // and the game's own frame time (*(*(*(0x828354F8)+0x48)+4)+0x20, the dt every update reads).
 REX_FUNC(sub_822AAF70) {
   __imp__sub_822AAF70(ctx, base);
+  HideQuitPlanks(base);
   spyro::OnGameFrame();  // Recomp Settings: frame-rate limiter, plugin settings on frame 1
+  spyro::LockOnFrame(base);
   if (g_manager && GuestReadable(base, g_manager + 0xAC0, 0x20)) g_current_menu_id.store(base[g_manager + 0xACD]);
   static auto s_t0 = std::chrono::steady_clock::now();
   static int s_frames = 0;
@@ -1966,6 +2330,18 @@ REX_EXTERN(__imp__sub_822C2B50);
 // made AFTER the original so it wins over whatever the game's own row-8 handler asks for.
 REX_FUNC(sub_822C2B50) {
   uint32_t menu = ctx.r3.u32, row = ctx.r4.u32 & 0xFF, event = ctx.r5.u32 & 0xFF, lr = uint32_t(ctx.lr);
+  // A on the Quit to Desktop plank (the menu still has the bottom stone as its selection).
+  for (const QuitPlank& q : g_quit)
+    if (q.menu && menu == q.menu && q.selected && event == 1) {
+      ExitToDesktop();
+      return;
+    }
+  // Exit to Desktop pressed: close the game (the copied Quit level row must not quit the level).
+  for (const ExitRow& e : g_exit)
+    if (e.menu && menu == e.menu && row == e.index && event == 1) {
+      ExitToDesktop();
+      return;
+    }
   __imp__sub_822C2B50(ctx, base);
   if (g_igo.menu && menu == g_igo.menu && row == kIgoHidden) {
     REXLOG_INFO("[spyro/recomp] pause Options: Recomp Settings button event {} (from LR 0x{:08X}, selection {} +0x60 {})",
@@ -2085,6 +2461,35 @@ REX_FUNC(sub_822C2DC0) {
   uint32_t menu = ctx.r3.u32;
   __imp__sub_822C2DC0(ctx, base);
   uint32_t dir = ctx.r3.u32 & 0xFF;
+  // Quit to Desktop plank (Game Menu / Pause): DOWN on the bottom stone (whose down neighbour
+  // wraps back up) selects the plank; while it is selected UP goes back and nothing else moves.
+  // Direction codes follow the neighbour bytes: 0 up, 1 down, 2 left, 3 right.
+  for (QuitPlank& q : g_quit) {
+    if (!q.menu || menu != q.menu) continue;
+    uint32_t sel = base[menu + 0x6C], count = Load32(base, menu + 0x8C), rows = Load32(base, menu + 0x84);
+    if (q.selected) {
+      if (dir == 0) {
+        q.selected = false;
+        GuestCall(ctx, base, sub_822C2B50, menu, q.bottom, 2, 0);  // the stone highlighted again
+      }
+      if (dir != 0xFF) {
+        REXLOG_INFO("[spyro/menu] Quit to Desktop: direction {} -> {}", dir, q.selected ? "stays" : "back to the stone");
+        ctx.r3.u64 = 0xFF;
+      }
+      return;
+    }
+    if (dir == 1 && sel < count && GuestReadable(base, rows, count * 4)) {
+      uint32_t row = Load32(base, rows + sel * 4);
+      if (GuestReadable(base, row, 8) && base[row + 5] <= sel) {
+        q.selected = true;
+        q.bottom = sel;
+        GuestCall(ctx, base, sub_822C2B50, menu, sel, 0, 0);  // the stone back to normal
+        REXLOG_INFO("[spyro/menu] Quit to Desktop selected (from row {})", sel);
+        ctx.r3.u64 = 0xFF;
+        return;
+      }
+    }
+  }
   // Pause Options: LEFT on the Tutorial switch moves to our Recomp Settings button (to its left)
   // instead of flipping the switch; RIGHT and A still flip it.
   if (g_igo.menu && menu == g_igo.menu && dir == 2 && base[menu + 0x6C] == kIgoTutorial) {
@@ -2098,6 +2503,21 @@ REX_FUNC(sub_822C2DC0) {
     REXLOG_INFO("[spyro/recomp] input direction code {} (selected row {})", dir,
                 base[g_recomp.menu + 0x6C]);
   }
+}
+
+// Main menu / pause menu destructors: their original row list back first (Exit to Desktop).
+REX_FUNC(sub_822DD210) {
+  RestoreExitRows(base, ctx.r3.u32);
+  for (QuitPlank& q : g_quit)  // the plank's pieces go with the screen's scene
+    if (q.menu == ctx.r3.u32) q = QuitPlank{};
+  __imp__sub_822DD210(ctx, base);
+}
+
+REX_FUNC(sub_822E0F38) {
+  RestoreExitRows(base, ctx.r3.u32);
+  for (QuitPlank& q : g_quit)
+    if (q.menu == ctx.r3.u32) q = QuitPlank{};
+  __imp__sub_822E0F38(ctx, base);
 }
 
 // Video menu destructor: take our row out of the row list first, so the menu never destroys

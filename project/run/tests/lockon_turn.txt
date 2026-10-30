@@ -1,0 +1,7 @@
+# Lock-on camera test (WORK_LOG 123), run with SPYRO_LOCKANY=1 SPYRO_LOCKTRACE=1 (the test save's
+# enemies are asleep until Spyro gets close): walk toward the arena's enemies, lock on with R3 -
+# the camera should swing around Spyro to face the nearest one - then R3 again to let go.
+# <seconds> <buttons> [hold]
+@24 3    LSU   1.5
+@24 6    R3
+@24 14   R3

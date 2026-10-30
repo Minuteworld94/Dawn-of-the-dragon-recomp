@@ -1,0 +1,9 @@
+# Lock-on test (WORK_LOG 123): walk into the arena so the grublins drop in, wait for them, lock on
+# with R3 (target dot), run "up" for 3 s (Spyro should run away from the camera), R3 off.
+# Run with SPYRO_LOCKTRACE=1 (logs view yaw vs Spyro's running direction and the dot position).
+# <seconds> <buttons> [hold]
+@24 3    LSU   1.5
+@24 18   R3
+@24 21   LSU   3
+@24 27   LSR   2
+@24 32   R3

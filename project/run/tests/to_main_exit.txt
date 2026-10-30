@@ -1,0 +1,7 @@
+# Exit to Desktop test (WORK_LOG 125): title -> main menu (state 0x06), then UP once (wraps from
+# Single Player to the last row = Exit to Desktop), screenshot, A = the game should close itself.
+# <seconds> <buttons> [hold]
+20  START   # skips the Sierra logo
+27  START   # title: "Press the START button"
+@06 3    UP
+@06 9    A

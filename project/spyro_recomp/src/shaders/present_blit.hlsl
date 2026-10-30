@@ -9,6 +9,8 @@ SamplerState g_Samplers[] : register(s0, space3);
 cbuffer Blit : register(b3, space4)
 {
     uint g_Texture;
+    float2 g_Dot;       // lock-on target dot centre, 0..1 across the picture (spyro_lockon.cpp)
+    float g_DotRadius;  // in picture heights; 0 = no dot
 };
 
 struct VsOut
@@ -29,5 +31,17 @@ VsOut VSMain(uint id : SV_VertexID)
 float4 PSMain(VsOut i) : SV_Target
 {
     // Sampler 1 = linear, clamp.
-    return float4(g_Textures[g_Texture].Sample(g_Samplers[1], i.uv).rgb, 1.0);
+    float3 c = g_Textures[g_Texture].Sample(g_Samplers[1], i.uv).rgb;
+    if (g_DotRadius > 0.0)
+    {
+        // White dot with a soft dark rim (16:9: x distances in picture heights).
+        float2 d = (i.uv - g_Dot) * float2(16.0 / 9.0, 1.0);
+        float r = length(d) / g_DotRadius;
+        float px = fwidth(r);
+        float rim = 1.0 - smoothstep(1.45 - px, 1.45 + px, r);
+        float disc = 1.0 - smoothstep(1.0 - px, 1.0 + px, r);
+        c = lerp(c, float3(0.0, 0.0, 0.0), rim * 0.45);
+        c = lerp(c, float3(1.0, 1.0, 1.0), disc * 0.95);
+    }
+    return float4(c, 1.0);
 }

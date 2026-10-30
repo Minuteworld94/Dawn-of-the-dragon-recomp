@@ -15,7 +15,8 @@ param(
     [int]$DisplayMode = 0,  # 0 windowed, 1 borderless, 2 fullscreen
     [int]$FrameRate = 1,    # 0 30, 1 60, 2 120, 3 Unlimited
     [int]$VSync = 0,        # 0 on, 1 off
-    [string]$SaveBase = "testuser_base"  # saves snapshot in project\run\tests the run starts from
+    [string]$SaveBase = "testuser_base",  # saves snapshot in project\run\tests the run starts from
+    [string[]]$Set = @()    # more settings lines, e.g. -Set bloom=1,draw_distance=1
 )
 # Test runs use their own settings file (project\run\tests\test_settings.ini, windowed) so the
 # player's recomp_settings.ini is never touched.
@@ -30,6 +31,7 @@ display_mode=$DisplayMode
 motion_blur=0
 anti_aliasing=0
 online_coop=0
+$($Set -join "`n")
 "@ | Set-Content "$PSScriptRoot\..\run\tests\test_settings.ini" -Encoding ascii
 $env:SPYRO_SETTINGS_FILE = "tests\test_settings.ini"
 $ErrorActionPreference = "Stop"

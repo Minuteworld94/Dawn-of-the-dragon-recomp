@@ -20,6 +20,9 @@ set(SPYRODOTD_SOURCES
     src/hang_dump.cpp
     src/xenos_texture.cpp
     src/test_input.cpp
+    src/spyro_lockon.cpp
+    src/spyro_profiler.cpp
+    src/guest_memory.cpp
 )
 
 if(WIN32)
@@ -30,11 +33,19 @@ endif()
 
 rexglue_setup_target(spyrodotd GPU_PLUGINS xenos)
 
+# Symbol map next to the exe (spyrodotd.map): names the addresses the sampling profiler logs
+# (src/spyro_profiler.cpp, WORK_LOG 124).
+if(WIN32)
+    target_link_options(spyrodotd PRIVATE "LINKER:/MAP")
+endif()
+
 # plume (RHI over D3D12 / Vulkan) for our own renderer - "Renderer: plume" in Recomp Settings.
 # Source: TOOLS\src\plume (TOOLS\_scripts\fetch-sources.ps1).
 set(PLUME_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../TOOLS/src/plume")
 add_subdirectory("${PLUME_DIR}" plume EXCLUDE_FROM_ALL)
 target_link_libraries(spyrodotd PRIVATE plume)
+# xxHash (header only) for plume's vertex cache.
+target_include_directories(spyrodotd PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../TOOLS/src/rexglue-sdk/thirdparty/xxHash")
 if(WIN32)
     target_link_libraries(spyrodotd PRIVATE d3d12 dxgi dxguid)
 endif()

@@ -9,6 +9,9 @@ game_root = "assets"
 file_path = "assets/default.xex"
 out_directory_path = "generated/default"
 includes = ["functions_auto.toml"]
+# Codegen register flags (skip_lr, cr_as_local, non_volatile_as_local, ...) stay off: all on
+# hung the boot (nothing drawn), the safe subset gave no measurable speed in Avalar - the time
+# was elsewhere (WORK_LOG 124).
 
 # Manual function boundaries for code the analysis could not discover
 # (typically reached only through function pointers / vtables).

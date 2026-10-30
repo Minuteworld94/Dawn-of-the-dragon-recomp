@@ -1,0 +1,9 @@
+# Quit to Desktop plank (WORK_LOG 125): Game Menu (state 0x06) -> UP UP (wrap to Back to main
+# menu, then Options) -> A = Options screen: the plank must be gone there, and back with B.
+# <seconds> <buttons> [hold]
+20  START   # skips the Sierra logo
+27  START   # title: "Press the START button"
+@06 3    UP
+@06 4    UP
+@06 5    A
+@1A 4    B
