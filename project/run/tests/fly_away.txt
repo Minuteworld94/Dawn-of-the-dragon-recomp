@@ -1,0 +1,17 @@
+# Scripted pad: boot -> load the save (as to_gameplay.txt), then in gameplay take off and fly
+# away from the bandit camp (draw-distance research, WORK_LOG 127). <seconds> <buttons> [hold]
+20  START
+27  START
+32  A
+37  A
+42  A
+47  A
+75  START
+78  A
+# From the save's first frame (menu state 0x24); gameplay has started well before +50 s.
+# Stick down = toward the camera, so the camera keeps looking at the camp while Spyro flies
+# away from it.
+@24 50   A
+@24 50.5 A
+@24 51   A
+@24 50   LSD   12

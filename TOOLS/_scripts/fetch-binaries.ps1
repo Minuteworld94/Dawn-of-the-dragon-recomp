@@ -79,4 +79,18 @@ foreach ($i in $items) {
         Write-Warning "FAILED $($i.dest): $($_.Exception.Message)"
     }
 }
+
+# Portable Python (official NuGet package; its tools\ folder is a complete Python). Added
+# 2026-11-08: the system Python was lost with a Windows reinstall; analysis scripts need it.
+if (-not $only -or ($only -contains 'python')) {
+    try {
+        $py = Get-File 'https://api.nuget.org/v3-flatcontainer/python/3.15.2/python.3.15.2.nupkg' 'python.3.15.2.nupkg.zip'
+        $tmp = Join-Path $Tools '_downloads\python_pkg'
+        Expand-Archive $py $tmp -Force
+        if (-not (Test-Path (Join-Path $Tools 'python'))) { Move-Item (Join-Path $tmp 'tools') (Join-Path $Tools 'python') }
+        Remove-Item $tmp -Recurse -Force
+    } catch {
+        Write-Warning "FAILED python: $($_.Exception.Message)"
+    }
+}
 Write-Host 'done'

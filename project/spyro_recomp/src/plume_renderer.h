@@ -81,6 +81,7 @@ void SetRequestedViewport(float x, float y, float w, float h);
 
 // True during the frame chosen with env SPYRO_PLUMEDRAWS=<frame> (debug logging of every call).
 bool LoggingFrame();
+void RequestLogFrame();  // draw-log the next frame (as F9 does)
 
 // Time spent in the game's own D3D draw functions run to flush render state (plume_hooks), for
 // the [plume/time] profile.

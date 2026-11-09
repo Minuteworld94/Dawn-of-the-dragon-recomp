@@ -15,6 +15,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -99,16 +100,35 @@ double Seconds(std::chrono::steady_clock::time_point since) {
   return std::chrono::duration<double>(std::chrono::steady_clock::now() - since).count();
 }
 
+// The parts inside a draw (constants, vertices, record, ...) are only timed with env
+// SPYRO_PLUMETIME: two clock reads per part per draw were ~5% of the frame with Draw distance
+// Max (WORK_LOG 127). The draw total, GPU wait and submit are always timed (fps line).
+const bool g_part_timing = std::getenv("SPYRO_PLUMETIME") != nullptr;
+
 struct ScopedTime {
   double& total;
-  std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
-  ~ScopedTime() { total += Seconds(start); }
+  bool on;
+  std::chrono::steady_clock::time_point start;
+  explicit ScopedTime(double& t, bool always = false)
+      : total(t), on(always || g_part_timing), start(on ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{}) {}
+  ~ScopedTime() {
+    if (on) total += Seconds(start);
+  }
 };
+
+std::chrono::steady_clock::time_point PartStart() {
+  return g_part_timing ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+}
+
+void AddPart(double& total, std::chrono::steady_clock::time_point since) {
+  if (g_part_timing) total += Seconds(since);
+}
 
 // Readable guest memory: cached per region, forgotten when reXglue unmaps guest memory
 // (guest_memory.cpp; clearing it on a timer used to stutter, WORK_LOG 115).
+// Not timed: the two clock reads cost more than the cached lookup (~30% of the draw time with
+// Draw distance Max, WORK_LOG 127).
 bool GuestReadable(const uint8_t* base, uint32_t a, uint32_t size) {
-  ScopedTime timer{g_prof.readable};
   return spyro::GuestReadable(base, a, size);
 }
 
@@ -137,6 +157,78 @@ __attribute__((target("ssse3"))) void CopySwapped32(uint8_t* dst, const uint8_t*
     std::memcpy(&v, src + i, 4);
     v = __builtin_bswap32(v);
     std::memcpy(dst + i, &v, 4);
+  }
+}
+
+// Big-endian 16-bit indices: the lowest and highest (raw, before the base vertex), 8 per step.
+// The index loops were ~5 ms a frame with Draw distance Max (1650 draws, WORK_LOG 127).
+__attribute__((target("sse4.1,ssse3"))) void IndexRange16(const uint8_t* src, uint32_t n, uint32_t& lo, uint32_t& hi) {
+  const __m128i swap = _mm_setr_epi8(1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14);
+  __m128i mn = _mm_set1_epi16(-1), mx = _mm_setzero_si128();
+  uint32_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    __m128i v = _mm_shuffle_epi8(_mm_loadu_si128(reinterpret_cast<const __m128i*>(src + 2 * i)), swap);
+    mn = _mm_min_epu16(mn, v);
+    mx = _mm_max_epu16(mx, v);
+  }
+  alignas(16) uint16_t a[8], b[8];
+  _mm_store_si128(reinterpret_cast<__m128i*>(a), mn);
+  _mm_store_si128(reinterpret_cast<__m128i*>(b), mx);
+  lo = 0xFFFF, hi = 0;
+  for (int k = 0; k < 8 && n >= 8; ++k) lo = std::min<uint32_t>(lo, a[k]), hi = std::max<uint32_t>(hi, b[k]);
+  for (; i < n; ++i) {
+    uint32_t v = uint32_t(src[2 * i]) << 8 | src[2 * i + 1];
+    lo = std::min(lo, v), hi = std::max(hi, v);
+  }
+}
+
+// out[i] = index i - sub, as 32-bit (16-bit big-endian source), 8 per step.
+__attribute__((target("sse4.1,ssse3"))) void WriteIndices16(const uint8_t* src, uint32_t n, uint32_t sub, uint32_t* out) {
+  const __m128i swap = _mm_setr_epi8(1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14);
+  const __m128i s = _mm_set1_epi32(int(sub));
+  uint32_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    __m128i v = _mm_shuffle_epi8(_mm_loadu_si128(reinterpret_cast<const __m128i*>(src + 2 * i)), swap);
+    _mm_storeu_si128(reinterpret_cast<__m128i*>(out + i), _mm_sub_epi32(_mm_cvtepu16_epi32(v), s));
+    _mm_storeu_si128(reinterpret_cast<__m128i*>(out + i + 4), _mm_sub_epi32(_mm_cvtepu16_epi32(_mm_srli_si128(v, 8)), s));
+  }
+  for (; i < n; ++i) out[i] = (uint32_t(src[2 * i]) << 8 | src[2 * i + 1]) - sub;
+}
+
+// The same for 32-bit indices, 4 per step.
+__attribute__((target("sse4.1,ssse3"))) void IndexRange32(const uint8_t* src, uint32_t n, uint32_t& lo, uint32_t& hi) {
+  const __m128i swap = _mm_setr_epi8(3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12);
+  __m128i mn = _mm_set1_epi32(-1), mx = _mm_setzero_si128();
+  uint32_t i = 0;
+  for (; i + 4 <= n; i += 4) {
+    __m128i v = _mm_shuffle_epi8(_mm_loadu_si128(reinterpret_cast<const __m128i*>(src + 4 * i)), swap);
+    mn = _mm_min_epu32(mn, v);
+    mx = _mm_max_epu32(mx, v);
+  }
+  alignas(16) uint32_t a[4], b[4];
+  _mm_store_si128(reinterpret_cast<__m128i*>(a), mn);
+  _mm_store_si128(reinterpret_cast<__m128i*>(b), mx);
+  lo = UINT32_MAX, hi = 0;
+  for (int k = 0; k < 4 && n >= 4; ++k) lo = std::min(lo, a[k]), hi = std::max(hi, b[k]);
+  for (; i < n; ++i) {
+    uint32_t v;
+    std::memcpy(&v, src + 4 * i, 4);
+    v = __builtin_bswap32(v);
+    lo = std::min(lo, v), hi = std::max(hi, v);
+  }
+}
+
+__attribute__((target("sse4.1,ssse3"))) void WriteIndices32(const uint8_t* src, uint32_t n, uint32_t sub, uint32_t* out) {
+  const __m128i swap = _mm_setr_epi8(3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12);
+  const __m128i s = _mm_set1_epi32(int(sub));
+  uint32_t i = 0;
+  for (; i + 4 <= n; i += 4)
+    _mm_storeu_si128(reinterpret_cast<__m128i*>(out + i),
+                     _mm_sub_epi32(_mm_shuffle_epi8(_mm_loadu_si128(reinterpret_cast<const __m128i*>(src + 4 * i)), swap), s));
+  for (; i < n; ++i) {
+    uint32_t v;
+    std::memcpy(&v, src + 4 * i, 4);
+    out[i] = __builtin_bswap32(v) - sub;
   }
 }
 
@@ -184,6 +276,11 @@ struct GuestShader {
   uint64_t hash = 0;
   bool pixel = false;
   std::vector<uint16_t> inputs;
+  bool fog = false;  // vertex shader with the game's distance fog (u_f4Fog = c0: start, end, density)
+  // Pixel shader that blends to the far camera's picture with depth (u_f2FarCameraAndTolerance = c28).
+  bool far_blend = false;
+  // Vertex shader with u_f44WorldViewProj in c1..c4 (rows x, y, z, w of the clip transform).
+  bool wvp = false;
   std::unique_ptr<RenderShader> shader;
   bool missing = false;
 };
@@ -266,6 +363,9 @@ struct VertexCache {
   struct Source {
     uint64_t hash = 0;
     uint32_t changes = 0;
+    uint32_t bytes = 0;       // size the hash was taken over
+    uint32_t full_frame = 0;  // frame of the last full hash (+1; 0 = never)
+    uint64_t sample = 0;      // SampleHash at that time
   };
   std::unordered_map<uint64_t, Source> sources;  // (guest address, stream) -> last contents
   uint32_t hits = 0, misses = 0, dynamic = 0, resets = 0;  // per report period
@@ -288,6 +388,7 @@ struct Context {
   uint32_t bound_color = 0, bound_depth = 0;
   bool bound = false;
   float viewport_z[2] = {0.0f, 1.0f};  // depth range of the viewport currently set
+  const RenderPipeline* last_pipeline = nullptr;  // set on the list (skips repeats)
   float requested_viewport[4] = {0, 0, 1280, 720};  // SetViewport as the game asked (x, y, w, h)
   // Resolution setting (1 / 1.5 / 2 / 3 x 1280x720, read at each frame start): every render
   // target, resolved texture, copy and clear is this many times the game's pixel size.
@@ -585,7 +686,7 @@ bool EnsureDevice() {
 // replaced.
 void RetireSlot(FrameSlot& s) {
   if (s.pending) {
-    ScopedTime timer{g_prof.gpu_wait};
+    ScopedTime timer{g_prof.gpu_wait, true};
     g.queue->waitForCommandFence(s.fence.get());
     s.pending = false;
   }
@@ -619,6 +720,7 @@ bool BeginFrame() {
   g.scale = spyro::ResolutionScale();
 
   g.list->begin();
+  g.last_pipeline = nullptr;
   g.list->setGraphicsPipelineLayout(g.layout.get());
   g.list->setGraphicsDescriptorSet(g.textures.get(), 0);
   g.list->setGraphicsDescriptorSet(g.textures.get(), 1);
@@ -870,13 +972,19 @@ uint32_t SamplerDescriptor(const xenos::TextureInfo& t) {
   return e.first;
 }
 
-// Cheap change detection: hash 64 evenly spaced 16-byte samples of the guest texture data.
+// Cheap change detection: hash 64 evenly spaced 16-byte samples of the guest data (size >= 16).
+// Two 64-bit words per sample (the byte-wise FNV was ~5% of the frame with Draw distance Max).
 uint64_t SampleHash(const uint8_t* p, uint32_t size) {
-  ScopedTime timer{g_prof.hash};
-  uint64_t h = Fnv(&size, 4);
+  constexpr uint64_t kPrime = 0x9E3779B97F4A7C15ull;
+  uint64_t h = (uint64_t(size) + 1) * kPrime;
   for (uint32_t i = 0; i < 64; ++i) {
     uint32_t off = uint32_t(uint64_t(size - 16) * i / 63);
-    h = Fnv(p + off, 16, h);
+    uint64_t a, b;
+    std::memcpy(&a, p + off, 8);
+    std::memcpy(&b, p + off + 8, 8);
+    h = (h ^ a) * kPrime;
+    h = (h ^ (b + i)) * kPrime;
+    h ^= h >> 29;
   }
   return h;
 }
@@ -909,6 +1017,12 @@ uint32_t TextureDescriptor(const uint8_t* base, uint32_t dev, uint32_t s, uint32
     Transition(r.texture.get(), r.layout, RenderTextureLayout::SHADER_READ);
     return r.plain_descriptor;
   }
+  // Already checked this frame (the same texture on many draws): nothing else to do.
+  uint32_t address = TextureAddress(base, obj);
+  uint64_t key = Fnv(words, 24, address);
+  if (auto it = g.texture_cache.find(key);
+      it != g.texture_cache.end() && it->second.texture && it->second.checked == g.frame + 1)
+    return it->second.descriptor;
   xenos::FormatInfo fmt = xenos::GetFormat(info.format);
   if (!fmt.supported || info.dimension != 1) {
     static std::unordered_set<uint32_t> s_logged;
@@ -917,7 +1031,6 @@ uint32_t TextureDescriptor(const uint8_t* base, uint32_t dev, uint32_t s, uint32
     return kNull2D;
   }
   // Verified offline on the title banner (WORK_LOG 104, analysis\texdump_view.py).
-  uint32_t address = TextureAddress(base, obj);
   uint32_t bw = (info.width + fmt.block - 1) / fmt.block, bh = (info.height + fmt.block - 1) / fmt.block;
   // Host texture size: whole blocks (D3D12 wants BC texture sizes in multiples of 4).
   uint32_t tex_w = bw * fmt.block, tex_h = bh * fmt.block;
@@ -937,9 +1050,7 @@ uint32_t TextureDescriptor(const uint8_t* base, uint32_t dev, uint32_t s, uint32
   if (levels.empty()) return kNull2D;
   uint32_t size = levels[0].extent;
 
-  uint64_t key = Fnv(words, 24, address);
   TextureEntry& e = g.texture_cache[key];
-  if (e.texture && e.checked == g.frame + 1) return e.descriptor;
   uint64_t content = SampleHash(base + address, size);
   if (e.texture && e.content == content) {
     e.checked = g.frame + 1;
@@ -1298,6 +1409,8 @@ bool LoggingFrame() {
   return (s_log_frame && g.frame == s_log_frame) || s_frame_logging == g.frame || g_key_log_frame == g.frame;
 }
 
+void RequestLogFrame() { g_key_log_frame = g.frame + 1; }  // like F9: log the whole next frame
+
 void SetWindow(void* native_window) { g_window = native_window; }
 
 void AddFlushTime(double seconds) { g_prof.flush += seconds; }
@@ -1311,6 +1424,17 @@ void RegisterShader(uint32_t guest_object, uint64_t hash, bool pixel_shader, std
   s.hash = hash;
   s.pixel = pixel_shader;
   s.inputs = std::move(vertex_inputs);
+  // All 846 fog vertex shaders of the game keep u_f4Fog in c0 (checked offline, WORK_LOG 127).
+  if (!pixel_shader && container && container_size)
+    s.fog = std::string_view(reinterpret_cast<const char*>(container), container_size).find("u_f4Fog") != std::string_view::npos;
+  // All 72 such pixel shaders keep u_f2FarCameraAndTolerance in c28 (checked offline, WORK_LOG 127).
+  if (pixel_shader && container && container_size)
+    s.far_blend = std::string_view(reinterpret_cast<const char*>(container), container_size).find("u_f2FarCameraAndTolerance") !=
+                  std::string_view::npos;
+  // All 846 vertex shaders with u_f44WorldViewProj keep it in c1..c4 (checked offline, WORK_LOG 134).
+  if (!pixel_shader && container && container_size)
+    s.wvp = std::string_view(reinterpret_cast<const char*>(container), container_size).find("u_f44WorldViewProj") !=
+            std::string_view::npos;
   // Not in the cache: start translating it now (shaders are created while a level loads, so most
   // are ready before their first draw).
   if (!g_cache.count(hash) && container && container_size) shader_translator::Request(hash, container, container_size);
@@ -1339,9 +1463,26 @@ bool FillBufferDraw(DrawCall& call, bool indexed, uint32_t start_index) {
 }
 
 void Draw(const DrawCall& call) {
-  ScopedTime timer{g_prof.draw};
+  ScopedTime timer{g_prof.draw, true};
   const uint8_t* base = call.base;
   uint32_t dev = call.device;
+  // Research (env SPYRO_DRAWSTACKS, WORK_LOG 127): each distinct host call stack that leads to a
+  // draw, logged once as exe RVAs (named with spyrodotd.map) - which game functions, virtual
+  // calls included, sit between the scene render and the draws.
+  static const bool s_stacks = std::getenv("SPYRO_DRAWSTACKS") != nullptr;
+  if (s_stacks) {
+    static std::unordered_set<uint64_t> s_seen;
+    void* frames[40];
+    USHORT n = RtlCaptureStackBackTrace(1, 40, frames, nullptr);
+    uint64_t h = 1469598103934665603ull;
+    for (USHORT i = 0; i < n; ++i) h = (h ^ reinterpret_cast<uintptr_t>(frames[i])) * 1099511628211ull;
+    if (s_seen.size() < 400 && s_seen.insert(h).second) {
+      uintptr_t exe = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr));
+      std::string s;
+      for (USHORT i = 0; i < n; ++i) s += fmt::format(" {:X}", reinterpret_cast<uintptr_t>(frames[i]) - exe);
+      REXLOG_INFO("[plume/stack] draw stack {} |{}", s_seen.size(), s);
+    }
+  }
   if (!BeginFrame()) return;
   auto skip = [](const char* why) {
     ++g.skipped;
@@ -1378,7 +1519,10 @@ void Draw(const DrawCall& call) {
 
   // Vertex layout from the declaration (+ zero inputs for anything the shader reads but the
   // declaration lacks).
-  std::vector<DeclElement> decl;
+  // Per-draw scratch lists are kept (thread_local) and cleared, not allocated each draw - heap
+  // traffic was ~10% of the frame with Draw distance Max (2900 draws, WORK_LOG 127).
+  static thread_local std::vector<DeclElement> decl;
+  decl.clear();
   if (!ReadDecl(base, Load32(base, dev + kDevDecl), decl)) return skip("no vertex declaration");
   // Packed types the host can't read as they are get decoded to 4 floats appended to each
   // vertex (host stride grows by 16 per such element).
@@ -1386,9 +1530,11 @@ void Draw(const DrawCall& call) {
     uint32_t stream, src_offset, type, dst_offset;
     bool integer;  // BLENDINDICES: the shader converts uint4 numbers (not raw float bits)
   };
-  std::vector<Expand> expands;
+  static thread_local std::vector<Expand> expands;
+  expands.clear();
   uint32_t host_stride[kZeroSlot] = {};
-  std::vector<RenderInputElement> elements;
+  static thread_local std::vector<RenderInputElement> elements;
+  elements.clear();
   uint32_t used_streams = 0;  // bit per stream the declaration reads
   for (const DeclElement& d : decl) {
     if (d.usage > 13) continue;
@@ -1433,7 +1579,8 @@ void Draw(const DrawCall& call) {
                           kZeroSlot, 0);
     layout_key = Fnv(&in, 2, layout_key);
   }
-  std::vector<RenderInputSlot> slots;
+  static thread_local std::vector<RenderInputSlot> slots;
+  slots.clear();
   for (uint32_t s = 0; s < kZeroSlot; ++s)
     if (used_streams & (1u << s)) slots.emplace_back(s, host_stride[s]);
   slots.emplace_back(kZeroSlot, 0);
@@ -1452,6 +1599,10 @@ void Draw(const DrawCall& call) {
   RenderState rs{Load32(base, dev + kRegDepthControl), Load32(base, dev + kRegBlendControl),
                  Load32(base, dev + kRegColorControl), Load32(base, dev + kRegModeControl),
                  Load32(base, dev + kRegColorMask)};
+  // Debug (env SPYRO_PLUMENODEPTHN=<count>): no depth test for the draws of that many indices
+  // (is a mesh hidden behind something? - draw distance research, WORK_LOG 127).
+  static const uint32_t s_no_depth_n = std::getenv("SPYRO_PLUMENODEPTHN") ? uint32_t(std::atoi(std::getenv("SPYRO_PLUMENODEPTHN"))) : 0;
+  if (s_no_depth_n && call.index_count == s_no_depth_n) rs.depth_control &= ~2u;
   uint64_t key = Fnv(&vs->hash, 8, Fnv(&ps->hash, 8, layout_key));
   key = Fnv(&rs, sizeof(rs), Fnv(&topology, sizeof(topology), key));
   RenderFormat target_formats[2] = {color->format, depth ? depth->format : RenderFormat::UNKNOWN};
@@ -1536,11 +1687,83 @@ void Draw(const DrawCall& call) {
     ScopedTime t{g_prof.constants};
     copy_swapped(vsc.ptr, dev + kDevVsConstants, 4096);
     copy_swapped(psc.ptr, dev + kDevPsConstants, 3584);
+    // Draw distance Max: the fog ends 4x further out (start kept). The original fogs everything
+    // out by 200 units (Avalar: start 5, end 200) - with nothing culled any more, far objects
+    // slowly faded into the haze (user).
+    if (vs->fog && spyro::GetSetting(spyro::kDrawDistance) == 1) {
+      float fog[4];
+      std::memcpy(fog, vsc.ptr, 16);
+      if (fog[1] > fog[0]) fog[1] = fog[0] + (fog[1] - fog[0]) * 4.0f;
+      std::memcpy(vsc.ptr, fog, 16);
+    }
+    // Draw distance Max: no hand-over to the far camera. The game draws the scene twice - a far
+    // camera into a background picture, then the near camera - and these pixel shaders fade their
+    // own colour into that picture with depth: w = saturate((c28.x - depth) / c28.y), colour =
+    // w * own + (1 - w) * background. The far picture leaves props out, so past c28.x (Avalar's
+    // camp from ~150 units) towers, huts, rocks vanished although they were drawn. c28.x far out
+    // keeps w = 1. Needs the near far plane change below too: without it the near pass is clipped
+    // at the hand-over distance and holes show there (Avalar's front palisade as bare ground, a rock
+    // pillar see-through - WORK_LOG 127 / 134). On with Max; env SPYRO_FARBLEND=0 turns it off
+    // (research).
+    static const bool s_far_blend_on = [] {
+      const char* v = std::getenv("SPYRO_FARBLEND");
+      return !v || *v != '0';
+    }();
+    if (ps->far_blend && s_far_blend_on && spyro::GetSetting(spyro::kDrawDistance) == 1) {
+      float hand_over[4];
+      std::memcpy(hand_over, psc.ptr + 16 * 28, 16);
+      static float s_logged = -1.0f;
+      if (hand_over[0] != s_logged) {
+        s_logged = hand_over[0];
+        REXLOG_INFO("[plume] far camera hand-over at {:.1f} (tolerance {:.1f}) -> off (Draw distance Max)", hand_over[0],
+                    hand_over[1]);
+      }
+      hand_over[0] = 1e30f;
+      std::memcpy(psc.ptr + 16 * 28, hand_over, 16);
+    }
+    // Draw distance Max: the NEAR camera's projection ends at the hand-over distance (level 2:
+    // far plane 204.9 = hand-over 205, WORK_LOG 134), so the GPU clips every near-pass triangle
+    // beyond it and the far picture shows there instead - walls and props "paint in" as the camera
+    // comes closer. For a perspective clip transform, row z = A * row w + (0, 0, 0, C) with
+    // A = f / (f - n), C = -n * A. Rows with a far plane under 20000 (the far camera's is ~100000)
+    // get the same near plane and a far plane of 100000. Level 2: 205 / 0.205, level 3: 150 / 0.15
+    // = each level's hand-over distance. On with Max; env SPYRO_NEARFAR=0 turns it off (research).
+    static const bool s_near_far_on = [] {
+      const char* v = std::getenv("SPYRO_NEARFAR");
+      return !v || *v != '0';
+    }();
+    if (vs->wvp && s_near_far_on && spyro::GetSetting(spyro::kDrawDistance) == 1) {
+      float* rz = reinterpret_cast<float*>(vsc.ptr + 16 * 3);
+      const float* rw = reinterpret_cast<const float*>(vsc.ptr + 16 * 4);
+      double ww = double(rw[0]) * rw[0] + double(rw[1]) * rw[1] + double(rw[2]) * rw[2];
+      if (ww > 1e-12) {
+        double a = (double(rz[0]) * rw[0] + double(rz[1]) * rw[1] + double(rz[2]) * rw[2]) / ww;
+        double c = double(rz[3]) - a * rw[3];
+        double res = std::fabs(rz[0] - a * rw[0]) + std::fabs(rz[1] - a * rw[1]) + std::fabs(rz[2] - a * rw[2]);
+        if (a > 1.0 + 1e-7 && c < 0.0 && res < 1e-4 * std::sqrt(ww)) {
+          double n = -c / a, f = a * n / (a - 1.0);
+          // The game's render cameras use near = far x 0.001 (sub_820DA658); other perspective
+          // transforms (one with near 0.01 / far 998.7 in level 2) are left alone.
+          if (f > n && f < 20000.0 && std::fabs(n - 0.001 * f) < 0.0002 * f) {
+            constexpr double kFar = 100000.0;
+            double a2 = kFar / (kFar - n), c2 = -n * a2;
+            for (int i = 0; i < 3; ++i) rz[i] = float(a2 * rw[i]);
+            rz[3] = float(a2 * rw[3] + c2);
+            static std::vector<int> s_logged;  // each far plane (whole units) once
+            int key = int(std::lround(f));
+            if (s_logged.size() < 32 && std::find(s_logged.begin(), s_logged.end(), key) == s_logged.end()) {
+              s_logged.push_back(key);
+              REXLOG_INFO("[plume] near camera far plane {:.1f} (near {:.4f}) -> {:.0f} (Draw distance Max)", f, n, kFar);
+            }
+          }
+        }
+      }
+    }
     std::memset(zero.ptr, 0, 64);
   }
 
   uint32_t sh[128] = {};
-  auto texture_start = std::chrono::steady_clock::now();
+  auto texture_start = PartStart();
   // Debug: env SPYRO_PLUMENULLSLOT=<s> leaves sampler s empty (only for pixel shader
   // SPYRO_PLUMENULLSLOT_PS=<hash> if given); SPYRO_PLUMESKIPPS=<hash> leaves out that shader's draws.
   static const uint32_t s_null_slot = [] {
@@ -1566,6 +1789,19 @@ void Draw(const DrawCall& call) {
     return v ? uint32_t(std::atoi(v)) : 0u;
   }();
   if (s_skip_n && call.index_count == s_skip_n) return;
+  // Debug (env SPYRO_PLUMEONLYN=<count>[,<count>...]): of the depth-tested scene draws only those
+  // with these index counts (the post-processing passes, depth test off, stay) - what does one
+  // batch draw on its own? (WORK_LOG 127)
+  static const std::unordered_set<uint32_t> s_only_n = [] {
+    std::unordered_set<uint32_t> set;
+    for (const char* v = std::getenv("SPYRO_PLUMEONLYN"); v && *v;) {
+      char* end = nullptr;
+      set.insert(uint32_t(std::strtoul(v, &end, 10)));
+      v = (end && *end == ',') ? end + 1 : nullptr;
+    }
+    return set;
+  }();
+  if (!s_only_n.empty() && (Load32(base, dev + kRegDepthControl) & 2) && !s_only_n.count(call.index_count)) return;
   uint32_t null_slot = !s_null_ps || ps->hash == s_null_ps ? s_null_slot : UINT32_MAX;
   for (uint32_t s = 0; s < 16; ++s) {
     uint32_t sampler = 0;
@@ -1574,7 +1810,7 @@ void Draw(const DrawCall& call) {
     sh[32 + s] = kNullCube;
     sh[48 + s] = sampler;
   }
-  g_prof.texture += Seconds(texture_start);
+  AddPart(g_prof.texture, texture_start);
   {
     // Investigation (WORK_LOG 112): the texture each pixel shader gets in sampler 7 (the fog
     // table of the character / world shaders), once per combination.
@@ -1664,10 +1900,11 @@ void Draw(const DrawCall& call) {
 
   // Indices (big-endian) with the base vertex added, then rebased to the lowest vertex used, so
   // only the vertices this draw reads are copied.
-  auto vertices_start = std::chrono::steady_clock::now();
+  auto vertices_start = PartStart();
   // Lists and strips go straight into the upload ring; fans, quads and rectangles are rebuilt as
   // triangle lists below (in `indices`).
-  std::vector<uint32_t> indices;
+  static thread_local std::vector<uint32_t> indices;
+  indices.clear();
   bool indexed = call.index_data != 0;
   bool rebuilt = call.primitive == 5 || call.primitive == 13 || call.primitive == 8;
   Allocation ib{};
@@ -1677,18 +1914,15 @@ void Draw(const DrawCall& call) {
     uint32_t isize = call.index_32bit ? 4 : 2;
     if (!call.index_count || !GuestReadable(base, call.index_data, call.index_count * isize))
       return skip("index data unreadable");
-    auto index_at = [&](uint32_t i) {
-      uint32_t a = call.index_data + i * isize;
-      return (call.index_32bit ? Load32(base, a) : uint32_t(base[a] << 8 | base[a + 1])) + call.base_vertex;
-    };
-    vmin = UINT32_MAX;
-    vmax = 0;
-    for (uint32_t i = 0; i < call.index_count; ++i) {
-      uint32_t v = index_at(i);
-      vmin = std::min(vmin, v);
-      vmax = std::max(vmax, v);
-    }
-    if (vmax - vmin >= (1u << 20)) return skip("vertex range too large");
+    // Lowest / highest raw index; with the base vertex added that is the vertex range, and every
+    // index rebased to it is just raw - lowest raw.
+    const uint8_t* isrc = base + call.index_data;
+    uint32_t raw_lo, raw_hi;
+    if (call.index_32bit) IndexRange32(isrc, call.index_count, raw_lo, raw_hi);
+    else IndexRange16(isrc, call.index_count, raw_lo, raw_hi);
+    vmin = raw_lo + call.base_vertex;
+    vmax = raw_hi + call.base_vertex;
+    if (raw_hi - raw_lo >= (1u << 20)) return skip("vertex range too large");
     uint32_t* out;
     if (rebuilt) {
       indices.resize(call.index_count);
@@ -1699,19 +1933,21 @@ void Draw(const DrawCall& call) {
       out = reinterpret_cast<uint32_t*>(ib.ptr);
       index_total = call.index_count;
     }
-    for (uint32_t i = 0; i < call.index_count; ++i) out[i] = index_at(i) - vmin;
+    if (call.index_32bit) WriteIndices32(isrc, call.index_count, raw_lo, out);
+    else WriteIndices16(isrc, call.index_count, raw_lo, out);
     g_prof.v_bytes += uint64_t(call.index_count) * isize;
   } else if (!call.vertex_count) {
     return skip("no vertices");
   }
-  g_prof.v_index += Seconds(vertices_start);
+  AddPart(g_prof.v_index, vertices_start);
   uint32_t vcount = vmax - vmin + 1;
   if (vcount > (1u << 20)) return skip("vertex range too large");
 
   // Vertices per stream: copy, swap every 32-bit word. Streams the host reads as they are go
   // straight into the upload ring (one pass); expanded ones and rectangle corners (stream 0 of a
   // rectangle list gets a 4th vertex per rectangle) are built in `stream_verts` first.
-  std::vector<uint8_t> stream_verts[kZeroSlot];
+  static thread_local std::vector<uint8_t> stream_verts[kZeroSlot];
+  for (auto& v : stream_verts) v.clear();
   Allocation vb[kZeroSlot];
   uint32_t vb_size[kZeroSlot] = {};
   RenderBuffer* cached_buffer[kZeroSlot] = {};  // stream served from the vertex cache
@@ -1743,11 +1979,25 @@ void Draw(const DrawCall& call) {
     bool cacheable = call.primitive != 8;
     uint64_t key = 0;
     if (cacheable) {
-      key = XXH3_64bits(base + src, bytes);
+      // Full hash of the source at most once a frame (instanced meshes are drawn many times),
+      // and for sources that never changed only every 8th frame - in between 64 sampled spots
+      // must still match (hashing every byte of every draw was ~2 ms a frame with Draw distance
+      // Max, WORK_LOG 127).
       VertexCache::Source& so = vc.sources[uint64_t(src) << 4 | s];
-      if (so.hash != key) {
-        if (so.hash) ++so.changes;
+      uint32_t now = g.frame + 1;
+      bool same_size = so.bytes == bytes && so.full_frame != 0;
+      if (same_size && so.full_frame == now) {
+        key = so.hash;
+      } else if (same_size && so.changes == 0 && now - so.full_frame < 8 && bytes >= 16 &&
+                 SampleHash(base + src, bytes) == so.sample) {
+        key = so.hash;
+      } else {
+        key = XXH3_64bits(base + src, bytes);
+        if (so.hash && so.hash != key && so.bytes == bytes) ++so.changes;
         so.hash = key;
+        so.bytes = bytes;
+        so.full_frame = now;
+        so.sample = bytes >= 16 ? SampleHash(base + src, bytes) : 0;
       }
       if (so.changes >= 3) {  // rewritten again and again: an animated mesh
         cacheable = false;
@@ -1770,7 +2020,8 @@ void Draw(const DrawCall& call) {
         }
       }
     }
-    std::vector<uint8_t> swapped(bytes);
+    static thread_local std::vector<uint8_t> swapped;
+    swapped.resize(bytes);
     copy_swapped(swapped.data(), src, bytes & ~3u);
     out.assign(size_t(vcount) * host_stride[s], 0);
     for (uint32_t v = 0; v < vcount; ++v) {
@@ -1809,7 +2060,8 @@ void Draw(const DrawCall& call) {
   uint32_t n = indexed ? call.index_count : call.vertex_count;
   if (call.primitive == 8 && used_streams != 1) return skip("rectangle list with several streams");
   if (rebuilt) {
-    std::vector<uint32_t> list;
+    static thread_local std::vector<uint32_t> list;
+    list.clear();
     if (call.primitive == 5) {  // fan
       for (uint32_t i = 2; i < n; ++i) list.insert(list.end(), {source_index(0), source_index(i - 1), source_index(i)});
     } else if (call.primitive == 13) {  // quads
@@ -1858,7 +2110,7 @@ void Draw(const DrawCall& call) {
         list.insert(list.end(), {i0, i1, i2, i2, i1, i3});
       }
     }
-    indices = std::move(list);
+    indices.swap(list);
     indexed = true;
   }
 
@@ -1875,7 +2127,7 @@ void Draw(const DrawCall& call) {
     std::memcpy(ib.ptr, indices.data(), indices.size() * 4);
     index_total = uint32_t(indices.size());
   }
-  g_prof.vertices += Seconds(vertices_start);
+  AddPart(g_prof.vertices, vertices_start);
 
   // Debug (env SPYRO_PLUMEDRAWS=<frame>): every draw of that frame with its target, viewport,
   // first positions and first vertex constants.
@@ -1958,6 +2210,19 @@ void Draw(const DrawCall& call) {
       }
     }
     REXLOG_INFO("[plume/draw] f{} #{} ps{} |{} | decl{}", g.frame, g.draws, pc, tx, layout);
+    // Debug (env SPYRO_PLUMEVSCONST=<n>): every non-zero vertex constant of the draws with n
+    // indices (bone palettes of skinned meshes - draw distance research, WORK_LOG 127).
+    static const uint32_t s_vsconst_n = std::getenv("SPYRO_PLUMEVSCONST") ? uint32_t(std::atoi(std::getenv("SPYRO_PLUMEVSCONST"))) : 0;
+    if (s_vsconst_n && n == s_vsconst_n) {
+      std::string all;
+      for (uint32_t r = 0; r < 256; ++r) {
+        float v[4];
+        std::memcpy(v, vsc.ptr + 16 * r, 16);
+        if (v[0] == 0 && v[1] == 0 && v[2] == 0 && v[3] == 0) continue;
+        all += fmt::format(" c{} {:.3f} {:.3f} {:.3f} {:.3f}", r, v[0], v[1], v[2], v[3]);
+      }
+      REXLOG_INFO("[plume/draw] f{} #{} vsconst{}", g.frame, g.draws, all);
+    }
   }
 
   // Debug (env SPYRO_PLUMESKIP=<first>-<last>): leave out those draws (by index in the frame).
@@ -1990,7 +2255,10 @@ void Draw(const DrawCall& call) {
         REXLOG_INFO("[plume] depth range {:.4f} .. {:.4f} (vte 0x{:X})", zmin, zmax, vte);
     }
   }
-  g.list->setPipeline(pipeline);
+  if (pipeline != g.last_pipeline) {  // same pipeline as the last draw: nothing to set
+    g.list->setPipeline(pipeline);
+    g.last_pipeline = pipeline;
+  }
   g.list->setGraphicsRootDescriptor(RenderBufferReference(g.upload, vsc.offset), 0);
   g.list->setGraphicsRootDescriptor(RenderBufferReference(g.upload, psc.offset), 1);
   g.list->setGraphicsRootDescriptor(RenderBufferReference(g.upload, shared.offset), 2);
@@ -2089,6 +2357,7 @@ void Resolve(uint8_t* base, uint32_t dev, uint32_t flags, uint32_t rect, uint32_
       g.list->setViewports(RenderViewport(0.0f, 0.0f, float(r->width), float(r->height)));
       g.list->setScissors(RenderRect(0, 0, r->width, r->height));
       g.list->setPipeline(g.blit_r32.get());
+      g.last_pipeline = g.blit_r32.get();
       g.list->setGraphicsPushConstants(0, &src->depth_descriptor, 0, 4);
       g.list->drawInstanced(3, 1, 0, 0);
       Transition(r->texture.get(), r->layout, RenderTextureLayout::SHADER_READ);
@@ -2202,6 +2471,7 @@ void Present(uint8_t* base, uint32_t front_texture) {
       else vh = vw * 9.0f / 16.0f;
       g.list->setViewports(RenderViewport((float(w) - vw) * 0.5f, (float(h) - vh) * 0.5f, vw, vh));
       g.list->setPipeline(g.blit.get());
+      g.last_pipeline = g.blit.get();
       struct {
         uint32_t texture;
         float dot_x, dot_y, dot_radius;
@@ -2217,7 +2487,7 @@ void Present(uint8_t* base, uint32_t front_texture) {
   g.list->end();
   const RenderCommandList* lists = g.list;
   {
-    ScopedTime timer{g_prof.submit};
+    ScopedTime timer{g_prof.submit, true};
     if (shown) {
       RenderCommandSemaphore* wait = slot.acquire.get();
       RenderCommandSemaphore* signal = g.release[g.image].get();

@@ -3,8 +3,14 @@
 # (works even when the window is behind others). PNGs (half size) go to -OutDir.
 # -InputScript <file>: instead of the menu test, play a scripted controller (src\test_input.cpp,
 # env SPYRO_INPUTSCRIPT; path relative to project\run or absolute).
+# -AutoBoot: no script and no menu test - the game presses through the logos and menus by itself
+# into the save (env SPYRO_AUTOBOOT, src\test_input.cpp); the level is up ~20 s after launch.
+# -Camera "ex,ey,ez,lx,ly,lz": a fixed research camera in the level (env SPYRO_CAMFIX,
+# src\spyro_lockon.cpp) - far views without flying (draw distance, WORK_LOG 127).
 # Usage: autotest-shots.ps1 -OutDir <folder> [-Name autotest] [-Shots 19,25,30] [-InputScript f]
 param(
+    [switch]$AutoBoot,
+    [string]$Camera = "",
     [Parameter(Mandatory = $true)][string]$OutDir,
     [string]$Name = "autotest",
     [int[]]$Shots = @(19, 25, 30),
@@ -71,6 +77,8 @@ function Snap([string]$file) {
     return "$file ($($r.Ri)x$($r.B))"
 }
 
+if ($AutoBoot) { $env:SPYRO_AUTOBOOT = "1"; if (-not $InputScript) { $InputScript = "tests\none.txt" } }
+if ($Camera) { $env:SPYRO_CAMPULL = "0.01,0"; $env:SPYRO_CAMFIX = $Camera }
 if ($InputScript) { $env:SPYRO_INPUTSCRIPT = $InputScript } else { $env:SPYRO_AUTOTEST = "1" }
 # Test runs keep their saves in project\run\testuser, reset before every run from the fixed
 # snapshot project\run\tests\testuser_base (first made as a copy of the player's saves), so
@@ -81,7 +89,8 @@ if (Test-Path "$root\project\run\testuser") { Remove-Item "$root\project\run\tes
 Copy-Item $base "$root\project\run\testuser" -Recurse
 $job = Start-Job -ScriptBlock { param($r, $n, $s) & "$r\project\run-game.ps1" -Seconds $s -Name $n -UserDir testuser } `
     -ArgumentList $root, $Name, (($Shots | Measure-Object -Maximum).Maximum + 8)
-Remove-Item Env:SPYRO_AUTOTEST, Env:SPYRO_INPUTSCRIPT, Env:SPYRO_SETTINGS_FILE -ErrorAction SilentlyContinue
+Remove-Item Env:SPYRO_AUTOTEST, Env:SPYRO_INPUTSCRIPT, Env:SPYRO_SETTINGS_FILE, Env:SPYRO_AUTOBOOT -ErrorAction SilentlyContinue
+if ($Camera) { Remove-Item Env:SPYRO_CAMPULL, Env:SPYRO_CAMFIX -ErrorAction SilentlyContinue }
 $start = Get-Date
 $events = @($Shots | % { [pscustomobject]@{ At = $_; Kind = 'shot' } })
 if ($MinimizeAt -gt 0) {

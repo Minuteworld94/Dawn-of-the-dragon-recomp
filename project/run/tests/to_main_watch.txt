@@ -1,0 +1,5 @@
+# Quit to Desktop plank on the main Game Menu (WORK_LOG 136): title -> Game Menu (state 0x06) and stay,
+# to watch the screen come in (the stones' fire swoosh) with screenshots.
+# <seconds> <buttons> [hold]
+20  START   # skips the Sierra logo
+27  START   # title: "Press the START button"

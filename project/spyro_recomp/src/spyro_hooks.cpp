@@ -36,6 +36,7 @@
 #endif
 
 #include "guest_memory.h"
+#include "plume_renderer.h"
 #include "spyro_settings.h"
 
 namespace {
@@ -1743,8 +1744,10 @@ struct QuitPlank {
   bool selected = false;
   uint32_t visible = 0xFFFFFFFF;
   float scale[2] = {1, 1};
+  uint32_t built_frame = 0;
 };
 QuitPlank g_quit[2];
+uint32_t g_quit_frame = 0;  // game frames (HideQuitPlanks runs once per game frame)
 
 // The pause Options object (state 0x17) of the current menu set, if the manager has one.
 uint32_t InGameOptionsObject(uint8_t* base) {
@@ -1807,6 +1810,7 @@ bool BuildQuitPlank(PPCContext& ctx, uint8_t* base, uint32_t menu, QuitPlank& q)
   q.ref = ref;
   q.scale[0] = LoadF32(base, plank + 0x20);
   q.scale[1] = LoadF32(base, plank + 0x24);
+  q.built_frame = g_quit_frame;
   REXLOG_INFO("[spyro/menu] menu 0x{:08X}: Quit to Desktop plank 0x{:08X} label 0x{:08X}", menu, plank, label);
   return true;
 }
@@ -1832,11 +1836,47 @@ void PlaceQuitPlank(PPCContext& ctx, uint8_t* base, QuitPlank& q, int k) {
     q.visible = visible;
     GuestCallWithString(ctx, base, sub_8211B368, q.label + 0x28, u"Quit to Desktop");
   }
+  // Fade with the screen (WORK_LOG 136). The plank used to keep the colour it was copied with (its
+  // alpha = whatever the source plank had at that moment: "sometimes see-through") and showed during
+  // the Game Menu's fire swoosh, where the screen's own pieces are still fully transparent. The
+  // screen's fade is read from its row stones (row +0x3C sprite, alpha = colour +0x34 low byte):
+  // they fade in from 0 with the screen (Game Menu: to 0xB4, the selected one 0xFF; Pause: to 0xFF)
+  // and out when it leaves. The brightest one at 0xB4 or more = fully shown.
+  float fade = 1.0f;
+  uint32_t rows = Load32(base, q.menu + 0x84), count = Load32(base, q.menu + 0x8C);
+  if (count && count <= 16 && GuestReadable(base, rows, count * 4)) {
+    uint32_t top = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+      uint32_t row = Load32(base, rows + i * 4);
+      uint32_t spr = GuestReadable(base, row, 0x40) ? Load32(base, row + 0x3C) : 0;
+      if (GuestReadable(base, spr, 0x38)) top = std::max<uint32_t>(top, base[spr + 0x37]);
+    }
+    fade = std::min(1.0f, float(top) / float(0xB4));
+  }
+  // Plank: opaque when shown. Label (CText2d colour +0x6F8, RGBA): the pause Options gold, alpha
+  // 0xC8 like an unselected Options label, 0xFF while selected.
+  Store32(base, q.plank + 0x34, 0xFFFFFF00u | uint32_t(std::lround(255.0f * fade)));
+  Store32(base, q.label + 0x6F8, 0xFFC73B00u | uint32_t(std::lround((q.selected ? 255.0f : 200.0f) * fade)));
+  // Research (env SPYRO_LOGQUIT): the fade and the plank / label colours, every 4th frame.
+  static const bool s_log = std::getenv("SPYRO_LOGQUIT") != nullptr;
+  static uint32_t s_lines = 0;
+  if (s_log && s_lines < 2000 && (g_quit_frame % 4) == 0) {
+    ++s_lines;
+    REXLOG_INFO("[spyro/quitlog] f{} k{} fade {:.2f} plank {:08X} label {:08X} flags {:02X}", g_quit_frame, k, fade,
+                Load32(base, q.plank + 0x34), Load32(base, q.label + 0x6F8), base[q.plank + 5]);
+  }
+  // ...and plume draw logs of three frames during the Game Menu's fire swoosh (~0.7 s in).
+  uint32_t age = g_quit_frame - q.built_frame;
+  if (s_log && k == 0 && (age == 30 || age == 45 || age == 60)) {
+    REXLOG_INFO("[spyro/quitlog] requesting a draw log, {} frames after the plank was built", age);
+    spyro::plume_renderer::RequestLogFrame();
+  }
 }
 
 // Every game frame: a plank whose screen is not the current menu is hidden (its screen stops
 // updating when another menu opens, so PlaceQuitPlank can't hide it - the user saw it stay).
 void HideQuitPlanks(uint8_t* base) {
+  ++g_quit_frame;
   if (!g_manager || !GuestReadable(base, g_manager + 0xAC0, 0x20)) return;
   uint8_t id = base[g_manager + 0xACD];
   for (int k = 0; k < 2; ++k) {
@@ -2136,6 +2176,9 @@ REX_FUNC(sub_822C11E0) {
     if (GuestReadable(base, mgr + 0xAC0, 0x20)) {
       static int s_last_id = -1;
       int id = base[mgr + 0xACD];
+      // Also here: the frame hook (sub_822AAF70) does not run on every screen - on Load game
+      // CurrentMenuId() still said main menu (auto boot, WORK_LOG 127).
+      g_current_menu_id.store(id);
       if (id != s_last_id) {
         REXLOG_INFO("[spyro/menus] current menu id 0x{:02X} -> 0x{:02X} (stack {} [{}])", s_last_id & 0xFF, id,
                     Load32(base, mgr + 0xAD8), HexWords(base, mgr + 0xAD0, 2));
@@ -2274,6 +2317,30 @@ REX_EXTERN(__imp__sub_822C2DC0);
 REX_EXTERN(__imp__sub_822ACFC0);
 REX_EXTERN(__imp__sub_822AAF70);
 REX_EXTERN(__imp__sub_822E92A0);
+REX_EXTERN(__imp__sub_82112DB8);  // CBillboard2d draw (vt 0x82069A78 slot 32)
+
+// CBillboard2d draw (WORK_LOG 136). A Quit to Desktop plank takes its screen sprite's visibility
+// HERE, at draw time: during the Game Menu's fire swoosh (a full-screen video over the menu) the
+// game hides the screen's pieces after the menu update where PlaceQuitPlank copied the flag, so
+// the plank (and its label, drawn right after it) showed on top of the fire. The plank is drawn
+// just before that sprite from the same piece list, so the sprite's flag is final by now.
+REX_FUNC(sub_82112DB8) {
+  uint32_t self = ctx.r3.u32;
+  for (int k = 0; k < 2; ++k) {
+    QuitPlank& q = g_quit[k];
+    if (!q.menu || (self != q.plank && self != q.ref)) continue;
+    if (self == q.plank && GuestReadable(base, q.ref, 8) && GuestReadable(base, q.label, 8)) {
+      uint8_t shown = base[q.ref + 5] & 2u;
+      base[q.plank + 5] = uint8_t((base[q.plank + 5] & ~2u) | shown);
+      base[q.label + 5] = uint8_t((base[q.label + 5] & ~2u) | shown);
+    }
+    // Research: during a plume draw-log frame, where the plank / the sprite are drawn.
+    if (spyro::plume_renderer::LoggingFrame())
+      REXLOG_INFO("[spyro/quitmark] k{} {} 0x{:08X} rgba {:08X} flags {:02X}", k, self == q.plank ? "PLANK" : "screen sprite", self,
+                  Load32(base, self + 0x34), base[self + 5]);
+  }
+  __imp__sub_82112DB8(ctx, base);
+}
 
 // CKBlurNodeFx start (vtable 0x8207B220 slot 24): switches on the screen-blur render effect
 // 0x38D (its flags |= 0x100, +0x20 = this node's data) that the node's update then animates.

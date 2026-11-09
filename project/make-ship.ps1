@@ -3,8 +3,9 @@
 #   ship\repo\                                  the source to push to the GitHub repository
 #   ship\HOW_TO_PUBLISH.md                      the steps
 # Never copies game files (ISO, default.xex, extracted data, generated code, dumps, saves).
-# Usage: project\make-ship.ps1 [-Version v0.1.0-prealpha]
-param([string]$Version = "v0.1.0-prealpha")
+# Usage: project\make-ship.ps1 [-Version v0.1.0-prealpha] [-RepoOnly]
+#   -RepoOnly: only ship\repo (a source commit between releases; ship\release is left alone)
+param([string]$Version = "v0.1.0-prealpha", [switch]$RepoOnly)
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
 $project = $PSScriptRoot
@@ -26,9 +27,12 @@ function Fill([string]$from, [string]$to) {  # template with {VERSION}
 foreach ($f in "SpyroRecomp.exe", "spyrodotd.exe", "rexruntime.dll", "rexgpu-xenos.dll", "dxcompiler.dll", "dxil.dll") {
     if (-not (Test-Path "$build\$f")) { throw "$build\$f is missing - build the project first" }
 }
-foreach ($d in "release", "repo") { if (Test-Path "$ship\$d") { Remove-Item "$ship\$d" -Recurse -Force -Confirm:$false } }
+foreach ($d in $(if ($RepoOnly) { @("repo") } else { @("release", "repo") })) {
+    if (Test-Path "$ship\$d") { Remove-Item "$ship\$d" -Recurse -Force -Confirm:$false }
+}
 
 # ---- release ----
+if (-not $RepoOnly) {
 $name = "SpyroRecomp-$Version"
 $rel = "$ship\release\$name"
 Copy-To "$build\SpyroRecomp.exe" "$rel\SpyroRecomp.exe"
@@ -50,6 +54,7 @@ $d3d12ma = Get-ChildItem "$tools\src\plume\contrib\D3D12MemoryAllocator" -Filter
 if ($d3d12ma) { Copy-To $d3d12ma.FullName "$rel\licenses\D3D12MemoryAllocator.txt" }
 Fill "$template\RELEASE_NOTES.md" "$ship\release\RELEASE_NOTES.md"
 Compress-Archive -Path $rel -DestinationPath "$ship\release\$name.zip" -CompressionLevel Optimal -Force
+}
 
 # ---- repository ----
 $repo = "$ship\repo"
@@ -60,8 +65,13 @@ Copy-To "$template\gitignore" "$repo\.gitignore"
 Copy-To "$template\gitattributes" "$repo\.gitattributes"
 # Our changes to the third-party sources, as patches against the pinned commits.
 New-Item -ItemType Directory -Force "$repo\patches" | Out-Null
-& $git -C "$tools\src\rexglue-sdk" diff --binary "--output=$repo\patches\rexglue-sdk.patch"
-& $git -C "$tools\src\plume" diff --binary "--output=$repo\patches\plume.patch"
+# safe.directory for this command only: after a Windows reinstall the source folders belong to the
+# old account's SID and git refuses them as "dubious ownership" (2026-11-08) - the patches came out empty.
+& $git -c "safe.directory=*" -C "$tools\src\rexglue-sdk" diff --binary "--output=$repo\patches\rexglue-sdk.patch"
+& $git -c "safe.directory=*" -C "$tools\src\plume" diff --binary "--output=$repo\patches\plume.patch"
+foreach ($p in "rexglue-sdk", "plume") {
+    if ((Get-Item "$repo\patches\$p.patch").Length -eq 0) { throw "patches\$p.patch is empty - git diff failed in TOOLS\src\$p" }
+}
 # Toolchain scripts (the toolchain itself is downloaded by them).
 foreach ($f in "env.ps1", "README.md") { Copy-To "$tools\$f" "$repo\TOOLS\$f" }
 foreach ($f in "fetch-binaries.ps1", "fetch-sources.ps1", "fix-symlinks.ps1", "portable-msvc.py") {
@@ -69,7 +79,7 @@ foreach ($f in "fetch-binaries.ps1", "fetch-sources.ps1", "fix-symlinks.ps1", "p
 }
 Copy-To "$template\apply-patches.ps1" "$repo\TOOLS\_scripts\apply-patches.ps1"
 # Project sources.
-foreach ($f in "PLAY.bat", "run-game.ps1", "make-ship.ps1") { Copy-To "$project\$f" "$repo\project\$f" }
+foreach ($f in "PLAY.bat", "CAMERA-TEST.bat", "run-game.ps1", "make-ship.ps1") { Copy-To "$project\$f" "$repo\project\$f" }
 Copy-Item "$template" "$repo\project\ship_template" -Recurse
 foreach ($f in "CMakeLists.txt", "CMakePresets.json", "spyrodotd_manifest.toml", "functions_auto.toml") {
     Copy-To "$project\spyro_recomp\$f" "$repo\project\spyro_recomp\$f"
@@ -94,7 +104,9 @@ $bad = Get-ChildItem $ship -Recurse -File | Where-Object {
 }
 if ($bad) { throw "game files found in ship: $($bad.FullName -join ', ')" }
 
-Fill "$template\HOW_TO_PUBLISH.md" "$ship\HOW_TO_PUBLISH.md"
-$zip = Get-Item "$ship\release\$name.zip"
-"release: $($zip.FullName) ($([math]::Round($zip.Length / 1MB, 1)) MB)"
+if (-not $RepoOnly) {
+    Fill "$template\HOW_TO_PUBLISH.md" "$ship\HOW_TO_PUBLISH.md"
+    $zip = Get-Item "$ship\release\$name.zip"
+    "release: $($zip.FullName) ($([math]::Round($zip.Length / 1MB, 1)) MB)"
+}
 "repo:    $repo ($((Get-ChildItem $repo -Recurse -File -Force).Count) files)"

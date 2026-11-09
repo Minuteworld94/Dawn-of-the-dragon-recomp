@@ -170,6 +170,67 @@ void DumpObject(const uint8_t* base, uint32_t obj, uint32_t size, const std::str
   std::fclose(f);
 }
 
+// Research (env SPYRO_FINDEYE=<s>, WORK_LOG 127): once, that many seconds into gameplay, every
+// copy in guest memory of the camera's eye position (3 big-endian floats, before and after
+// collision: cam+0x550 / +0x598), each with the nearest word before it that looks like a vtable
+// (0x8206xxxx-0x8208xxxx) - whatever measures distances to the camera keeps a copy of it.
+void FindEyeCopies(const uint8_t* base) {
+  static const double s_at = std::getenv("SPYRO_FINDEYE") ? std::atof(std::getenv("SPYRO_FINDEYE")) : -1.0;
+  if (s_at < 0) return;
+  static bool s_done = false, s_started = false;
+  static std::chrono::steady_clock::time_point s_t0;
+  if (s_done) return;
+  if (!s_started) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (spyro::CurrentMenuId() != 0x24 || g_heroes.empty()) return;
+    s_started = true;
+    s_t0 = std::chrono::steady_clock::now();
+  }
+  if (std::chrono::duration<double>(std::chrono::steady_clock::now() - s_t0).count() < s_at) return;
+  s_done = true;
+  uint32_t cam;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    cam = Camera(base);
+  }
+  if (!cam) return;
+#if defined(_WIN32)
+  for (uint32_t which : {0x550u, 0x598u}) {
+    uint8_t pattern[12];
+    std::memcpy(pattern, base + cam + which, 12);
+    REXLOG_INFO("[spyro/findeye] camera 0x{:08X} +0x{:03X} eye ({:.3f} {:.3f} {:.3f})", cam, which,
+                LoadF(base, cam + which), LoadF(base, cam + which + 4), LoadF(base, cam + which + 8));
+    int hits = 0;
+    for (uint64_t a = 0x10000; a < 0xFFFF0000ull && hits < 200;) {
+      MEMORY_BASIC_INFORMATION mbi{};
+      if (!VirtualQuery(base + a, &mbi, sizeof(mbi))) break;
+      uint64_t start = uint64_t(static_cast<const uint8_t*>(mbi.BaseAddress) - base);
+      uint64_t end = std::min<uint64_t>(start + mbi.RegionSize, 0x100000000ull);
+      bool ok = mbi.State == MEM_COMMIT && !(mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) &&
+                (mbi.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE));
+      if (ok)
+        for (uint64_t p = (start + 3) & ~3ull; p + 12 <= end && hits < 200; p += 4) {
+          if (std::memcmp(base + p, pattern, 12) != 0) continue;
+          ++hits;
+          uint32_t g = uint32_t(p), vt = 0, vt_at = 0;
+          for (uint32_t back = 0; back <= 0x800 && back <= g; back += 4) {
+            uint32_t v = Load32(base, g - back);
+            if (v >= 0x82060000u && v < 0x82090000u) {
+              vt = v;
+              vt_at = g - back;
+              break;
+            }
+          }
+          REXLOG_INFO("[spyro/findeye]   copy at 0x{:08X}{}: vtable-like 0x{:08X} at 0x{:08X} (+0x{:X})", g,
+                      g >= cam && g < cam + 0x1000 ? " (camera service)" : "", vt, vt_at, g - vt_at);
+        }
+      a = end;
+    }
+    REXLOG_INFO("[spyro/findeye] {} copies of +0x{:03X}", hits, which);
+  }
+#endif
+}
+
 void DebugDumps(const uint8_t* base) {
   static const std::vector<double> s_times = [] {
     std::vector<double> t;
@@ -392,6 +453,60 @@ void OverrideCamera(uint8_t* base, uint32_t cam) {
   base[data + 3] |= 12;
 }
 
+// Research (env SPYRO_CAMPULL=<units>[,<rise per unit>], draw distance, WORK_LOG 127): the
+// camera pulled back that far behind (and above) where the game puts it, still looking at the
+// same point - far views in scripted tests without flying (the culling all measures from the
+// camera node's position, which this moves).
+void PullCamera(uint8_t* base, uint32_t cam, float units, float rise) {
+  constexpr uint32_t kRight = 0x574, kUp = 0x580, kFwd = 0x58C, kEye = 0x598, kLook = 0x5A4;
+  Vec3 eye = LoadVec(base, cam + kEye), look = LoadVec(base, cam + kLook), f0 = LoadVec(base, cam + kFwd);
+  if (!Sane(eye) || !Sane(look)) return;
+  Vec3 new_eye{eye.x - f0.x * units, eye.y - f0.y * units + units * rise, eye.z - f0.z * units};
+  // SPYRO_CAMFIX=<eye x,y,z,look x,y,z>: a fixed view instead (screenshots that line up between
+  // runs); the game's own eye / look-at are logged now and then to pick one.
+  static int s_n = 0;
+  if (s_n++ % 300 == 0)
+    REXLOG_INFO("[spyro/cam] eye {:.1f} {:.1f} {:.1f} look {:.1f} {:.1f} {:.1f}", eye.x, eye.y, eye.z, look.x, look.y, look.z);
+  static const std::vector<float> s_fix = [] {
+    std::vector<float> v;
+    if (const char* e = std::getenv("SPYRO_CAMFIX"))
+      for (const char* p = e; *p;) {
+        v.push_back(float(std::atof(p)));
+        while (*p && *p != ',') ++p;
+        if (*p) ++p;
+      }
+    return v;
+  }();
+  if (s_fix.size() == 6) {
+    new_eye = {s_fix[0], s_fix[1], s_fix[2]};
+    look = {s_fix[3], s_fix[4], s_fix[5]};
+  }
+  Vec3 f = Normalize({look.x - new_eye.x, look.y - new_eye.y, look.z - new_eye.z});
+  Vec3 r = Normalize({f.z, 0, -f.x});
+  Vec3 u{f.y * r.z - f.z * r.y, f.z * r.x - f.x * r.z, f.x * r.y - f.y * r.x};
+  StoreVec(base, cam + kRight, r);
+  StoreVec(base, cam + kUp, u);
+  StoreVec(base, cam + kFwd, f);
+  StoreVec(base, cam + kEye, new_eye);
+  StoreVec(base, cam + 0x5DC, u);
+  StoreVec(base, cam + 0x5E8, f);
+  StoreVec(base, cam + 0x5F4, new_eye);
+  uint32_t node = Load32(base, cam + 0x10);
+  if (node < 0x1000) return;
+  uint32_t data = Load32(base, node + 4);
+  if (data < 0x1000) return;
+  uint32_t m = data + 0x10;
+  StoreVec(base, m + 0x00, r);
+  StoreVec(base, m + 0x10, u);
+  StoreVec(base, m + 0x20, f);
+  StoreVec(base, m + 0x30, new_eye);
+  uint32_t flags = __builtin_bswap32(Load32(base, m + 0x0C) & ~0x00020003u);
+  std::memcpy(base + m + 0x0C, &flags, 4);
+  uint32_t parent = Load32(base, data + 0xA0);
+  if (parent >= 0x1000) base[parent + 3] |= 3;
+  base[data + 3] |= 12;
+}
+
 }  // namespace
 
 extern "C" REX_EXTERN(__imp__sub_8215AF50);
@@ -404,6 +519,9 @@ extern "C" REX_FUNC(sub_8215AF50) {
   // SPYRO_FARCLIP_TOGGLE: only every other frame (plume counts draws per parity, A/B in one run).
   static const bool s_toggle = std::getenv("SPYRO_FARCLIP_TOGGLE") != nullptr;
   bool on = !s_toggle || (g_frame.load() & 1);
+  // Research (env SPYRO_CAMFOV=<degrees>): a narrower field of view - a zoomed look at far views.
+  static const float s_fov = std::getenv("SPYRO_CAMFOV") ? float(std::atof(std::getenv("SPYRO_CAMFOV"))) : 0.0f;
+  if (s_fov > 0 && Load32(base, cam) == kCameraSrvVtable) StoreF(base, cam + 0x56C, s_fov);
   if (s_far > 0 && on && Load32(base, cam) == kCameraSrvVtable) {
     static int s_logged = 0;
     if (s_logged++ < 3) REXLOG_INFO("[spyro/lockon] far clip input {:.1f} -> {:.1f}", LoadF(base, cam + 0x568), s_far);
@@ -411,9 +529,87 @@ extern "C" REX_FUNC(sub_8215AF50) {
   }
   __imp__sub_8215AF50(ctx, base);
   if (Load32(base, cam) == kCameraSrvVtable && spyro::CurrentMenuId() == 0x24) OverrideCamera(base, cam);
+  // Research (env SPYRO_FINDHERO): where in the hero objects (0x900 bytes) the camera's follow
+  // point (+0x484, the hero's position) is stored - for moving the hero in tests.
+  static const bool s_find_hero = std::getenv("SPYRO_FINDHERO") != nullptr;
+  static int s_hero_frames = 0;
+  if (s_find_hero && Load32(base, cam) == kCameraSrvVtable && spyro::CurrentMenuId() == 0x24 && ++s_hero_frames == 600) {
+    Vec3 f = LoadVec(base, cam + kCamFollow);
+    std::lock_guard<std::mutex> lock(g_mutex);
+    for (uint32_t h : g_heroes) {
+      if (!spyro::GuestReadable(base, h, 0x900)) continue;
+      std::string offs;
+      for (uint32_t o = 0; o + 12 <= 0x900; o += 4) {
+        Vec3 p = LoadVec(base, h + o);
+        if (std::fabs(p.x - f.x) < 0.5f && std::fabs(p.y - f.y) < 2.0f && std::fabs(p.z - f.z) < 0.5f)
+          offs += fmt::format(" +0x{:X}({:.2f},{:.2f},{:.2f})", o, p.x, p.y, p.z);
+      }
+      REXLOG_INFO("[spyro/hero] 0x{:08X} vt 0x{:08X} follow ({:.2f},{:.2f},{:.2f}) at:{}", h, Load32(base, h), f.x, f.y, f.z,
+                  offs);
+    }
+  }
+  // Research (env SPYRO_HEROPOS=x,y,z): the hero (and its partner) held at that point from 10 s
+  // into the level - the hero's position fields found with SPYRO_FINDHERO (+0x64 / +0x4D0 /
+  // +0x570 now, +0x4FC / +0x57C before). For tests where the game hides things by where the hero
+  // is, not where the camera is (user: the camp still vanished with Spyro flown far away).
+  static const std::vector<float> s_hero_pos = [] {
+    std::vector<float> v;
+    if (const char* e = std::getenv("SPYRO_HEROPOS"))
+      for (const char* p = e; *p;) {
+        v.push_back(float(std::atof(p)));
+        while (*p && *p != ',') ++p;
+        if (*p) ++p;
+      }
+    return v;
+  }();
+  static int s_hold_frames = 0;
+  if (s_hero_pos.size() == 3 && Load32(base, cam) == kCameraSrvVtable && spyro::CurrentMenuId() == 0x24 &&
+      ++s_hold_frames > 600) {
+    Vec3 p{s_hero_pos[0], s_hero_pos[1], s_hero_pos[2]};
+    std::lock_guard<std::mutex> lock(g_mutex);
+    for (size_t i = 0; i < g_heroes.size(); ++i) {
+      uint32_t h = g_heroes[i];
+      if (!spyro::GuestReadable(base, h, 0x600)) continue;
+      Vec3 q{p.x + 3.0f * float(i), p.y, p.z};
+      for (uint32_t o : {0x64u, 0x4D0u, 0x570u, 0x4FCu, 0x57Cu}) StoreVec(base, h + o, q);
+    }
+  }
+  // Research (env SPYRO_DUMPCAM, fog hunt): the camera service's words as floats, once, 10 s in.
+  static const bool s_dump = std::getenv("SPYRO_DUMPCAM") != nullptr;
+  static int s_frames = 0;
+  if (s_dump && Load32(base, cam) == kCameraSrvVtable && spyro::CurrentMenuId() == 0x24 && ++s_frames == 600) {
+    for (uint32_t o = 0; o < 0x800; o += 0x40) {
+      std::string w;
+      for (uint32_t k = 0; k < 0x40; k += 4) w += fmt::format(" {:g}", LoadF(base, cam + o + k));
+      REXLOG_INFO("[spyro/cam] +0x{:03X}:{}", o, w);
+    }
+  }
+  static const float s_pull = std::getenv("SPYRO_CAMPULL") ? float(std::atof(std::getenv("SPYRO_CAMPULL"))) : 0.0f;
+  static const float s_rise = [] {
+    const char* e = std::getenv("SPYRO_CAMPULL");
+    const char* comma = e ? std::strchr(e, ',') : nullptr;
+    return comma ? float(std::atof(comma + 1)) : 0.35f;
+  }();
+  if (s_pull > 0 && Load32(base, cam) == kCameraSrvVtable && spyro::CurrentMenuId() == 0x24)
+    PullCamera(base, cam, s_pull, s_rise);
 }
 
 namespace spyro {
+
+// [spyro recomp] 11-08: the followed hero's position and the camera eye from the camera service
+// (for the draw-distance flight log, spyro_drawdist.cpp PollNodes).
+bool CameraHeroAndEye(const uint8_t* base, float hero[3], float eye[3]) {
+  uint32_t cam;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    cam = Camera(base);
+  }
+  if (!cam) return false;
+  Vec3 h = LoadVec(base, cam + kCamFollow), e = LoadVec(base, cam + kCamEye);
+  hero[0] = h.x, hero[1] = h.y, hero[2] = h.z;
+  eye[0] = e.x, eye[1] = e.y, eye[2] = e.z;
+  return true;
+}
 
 bool LockOnMarker(float& x, float& y) {
   if (!g_marker_on.load()) return false;
@@ -440,6 +636,7 @@ void LockOnFrame(uint8_t* base) {
     std::fflush(s_rec);
   }
   DebugDumps(base);
+  FindEyeCopies(base);
 }
 
 void LockOnPad(uint8_t* base, uint32_t state) {

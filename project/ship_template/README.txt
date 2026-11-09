@@ -39,7 +39,9 @@ WHERE THINGS ARE
 KNOWN ISSUES (pre-alpha)
   - Tested through the first three levels; later areas may still have rendering bugs.
     If something looks wrong, try Renderer: Xenos (next start) and please report where.
-  - Draw distance "Max" and online co-op are not there yet.
+  - Online co-op is not there yet.
+  - Draw distance "Max" (no pop-in) needs the default renderer (plume) and costs some speed in
+    big open views.
 
 REPORTING BUGS
   Please attach the newest file from the logs folder and say what you were doing.

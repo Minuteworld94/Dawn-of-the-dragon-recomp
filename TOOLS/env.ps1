@@ -26,6 +26,8 @@ $env:PATH = @(
     "$T\dxc\bin\x64"
     "$T\jdk21\bin"
     "$T\extract-xiso"
+    "$T\python"            # portable Python 3.15.2 (NuGet package), added 2026-11-08 after the Windows reinstall
+    "$T\python\Scripts"
     "$Vc\bin\Hostx64\x64"
     "$Kit\bin\$SdkVer\x64"
     $env:PATH

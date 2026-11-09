@@ -175,6 +175,9 @@ TOOLS\ contents (versions as of 2026-10-25):
   cmake\ 4.4.4   ninja\ 1.13.2   git\ (MinGit 2.56.0.3)   7zip\   dxc\ 1.9.2609
   jdk21\   ghidra\ 12.1.3 (+ XEXLoaderWV plugin pre-installed, pinned to 12.1.3)
   renderdoc\ 1.46   extract-xiso\   xenia-canary-reference\ (reference only)
+  python\ 3.15.2 (portable NuGet package, on PATH via env.ps1; added 2026-11-08 because the
+    system Python was lost in a Windows reinstall - all analysis\*.py use only the standard library;
+    fetch-binaries.ps1 re-downloads it)
   rexglue-sdk-0.10.0-prebuilt\  (official release; fallback)
   src\rexglue-sdk   (development branch, our build)   src\plume
   src\XenosRecomp   src\XenonRecomp   src\UnleashedRecomp (reference)
@@ -282,3 +285,17 @@ PERFORMANCE (2026-10-29, WORK_LOG 124): Avalar 28 fps -> 163-326 fps at 1440p un
 uncached VirtualQuery in our hooks (now src\guest_memory.cpp for everyone) and per-frame CPU
 decode of packed vertex formats (now plume's vertex cache). Profiler: env SPYRO_PROFILE=<s> +
 project\analysis\profile_names.py with out\build\...\spyrodotd.map.
+PRE-ALPHA 2 (2026-10-30, WORK_LOG 126): tag v0.2.0-prealpha pushed (commit f7a0779); release zip ship\release\SpyroRecomp-v0.2.0-prealpha.zip.
+DRAW DISTANCE (in progress, WORK_LOG 127, src\spyro_drawdist.cpp): Recomp Settings "Draw distance:
+Original / Max". Max turns off all five ways the game hides far things (per-object limit, group fade
+records except the light rays, sphere and box zones, the 150-unit view frustum far plane). Far views are tested with the research camera env
+SPYRO_CAMPULL / SPYRO_CAMFIX (fixed eye/look-at), never by scripted flying.
+REMAINING CAUSE (found 11-02): the game draws a low-detail FAR CAMERA picture first, then the
+near scene on top; 72 world pixel shaders fade into that picture past c28.x (Avalar 150) - props
+missing from the far picture vanish though drawn.
+ROOT CAUSE + FIX (11-08, WORK_LOG 134): the NEAR camera's projection far plane equals that hand-over
+distance (level 2: 205, level 3: 150), so the GPU clips the near pass there ("paint brush" pop-in,
+see-through walls). On Max plume now (a) turns the far-picture blend off and (b) rebuilds the near
+camera's projection with far 100000 - both default on (research off: SPYRO_FARBLEND=0 /
+SPYRO_NEARFAR=0). Verified hands-off in levels 2 and 3; waiting for the user's real-play test.
+HANDS-OFF TESTING: analysis\autotest-shots.ps1 -AutoBoot [-Camera "ex,ey,ez,lx,ly,lz"] boots into the Avalar test save (tests\testuser_avalar, slot 1) and parks a fixed camera; project\CAMERA-TEST.bat does it for the player.

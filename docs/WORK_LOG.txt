@@ -1896,3 +1896,428 @@ NEXT STEPS (in order):
        frame while another menu is current (HideQuitPlanks in the frame hook) - the user saw an
        unselectable copy stay in other menus before that. Forgotten in the menu destructor hooks.
        Direction codes confirmed: 0 up, 1 down.
+
+[126] PRE-ALPHA 2 (2026-10-30): v0.2.0-prealpha. Draw distance row shows "Max - soon" (not hooked
+     up). Templates updated (RELEASE_NOTES: new in pre-alpha 2 = performance, lock-on, bloom, Quit
+     to Desktop; READMEs: settings table + Extras + first three levels). make-ship.ps1 -Version
+     v0.2.0-prealpha -> zip 35.1 MB (36,842,316 bytes), repo 106 files. Smoke test: zip unpacked
+     to scratch, SpyroRecomp.exe --game "<extracted game>\Legend of Spyro, The - Dawn of the
+     Dragon (USA, Europe) (En,Fr,De,Es,It,Nl)" (the folder WITH default.xex - one level up the
+     launcher says "not the game"): plume ready, 1063 shaders, Quit plank built, level loaded.
+     GitHub: cloned the repo to scratch, robocopy /MIR ship\repo over it (keeps .git), commit
+     f7a0779 as Minuteworld94 <noreply> (28 files), pushed main + tag v0.2.0-prealpha. Release:
+     pre-filled releases/new link (ship\RELEASE_LINK.txt) opened for the user, who attaches
+     ship\release\SpyroRecomp-v0.2.0-prealpha.zip and publishes.
+
+[127] DRAW DISTANCE / POP-IN RESEARCH (2026-10-30, in progress). User: trees, objects, stones and
+     part of the Avalar bandit camp (its towers / flag poles, not the palisade) vanish when far -
+     whole objects with their own distance limit, not detail swaps (screenshots before/after).
+     - Ruled out: camera service +0x568 (see 125); renderer singleton 0x82835920 (built by
+       sub_8212A218; its +100..+136 defaults are 0/-1/1/0.2); CMultiGeometryBasic (vt 0x8206C20C,
+       one renderer-owned helper with only a destructor sub_8213F020); the trail/particle path
+       sub_820FEA08 (position history, not culling).
+     - FAR CLIP FOUND but NOT the cause: sub_820DA658 (called by the scene render sub_820DA9E8)
+       sets the render camera [[scene+44]+48]: fov +120/+124, far +132 = sub_820D94D8 output
+       (area record [[r3+24]]+8, max with another record +8, optional x const 31936; second output
+       blends with the previous far) and near +128 = far x 0.001 (>= 1e-4); after changes it calls
+       sub_823B1C98(cam) and sub_823B3ED0(cam+4). Avalar far = 1503.7 (near 1.5037); once 66897.2
+       / near 66.9 was seen (unknown area or the user flying). src\spyro_drawdist.cpp hooks it
+       (far x k after setup, near kept, projection rebuilt) but far x4 on every other frame
+       (SPYRO_FARSCALE=4 SPYRO_FARSCALE_TOGGLE=1 SPYRO_DRAWPARITY=1) drew identical counts -> left
+       inactive (only env SPYRO_FARSCALE turns it on).
+     - Tools: SPYRO_FINDEYE=<s> (lockon.cpp: every copy of the camera eye in guest memory - most
+       are plume's command-buffer constants at 0x401xxxxx); scratch distscan.py (262 functions that
+       compare a squared distance), callgraph.py + reach.py (static render tree reaches only
+       sub_820DA658), SPYRO_DRAWSTACKS (plume Draw logs each distinct host stack, named with
+       stacknames.py + spyrodotd.map): 29 chains, all render-QUEUE drains (sub_820DA9E8 ->
+       sub_820DB210 / DB580 / DB4A0 / DB8E0 / DAD48 -> sub_820D9670 -> per-type draw routines
+       sub_820DCA40 / DCFB8 / DC570 / DD9C8 / DD628 / DDCC8 / E1070 ...) with no distance compare.
+     - NEXT: the per-object distance check is where the render queues are FILLED (a cull pass
+       before the drains; candidates: CKQuadtree / CKQuadTreeBranch vt 0x82071B50 / Leaf vt
+       0x82071BB0 / Root vt 0x82071C10 / CKSector traversal). Find what writes the queues that
+       sub_820D9670 reads, or hook the quadtree classes' virtuals with call counts.
+     - FOUND (2026-10-30): per-object distance cull = sub_82109918(obj, r4..r6, r7 = check distance,
+       f1 = max distance SQUARED), called by sub_820EC4F8 / sub_820F1130 from the scene walk
+       (sub_820ED200 -> sub_820FFD50 -> sub_820F0A70 / sub_820EB910 / sub_820EB9C0, recursive).
+       With r7 = 1: camera position renderer [[[0x82835934]+44]+56]+4 +128/+132/+136, object
+       [obj+28] +44/+48/+52; dist2 > f1 -> not added to a render bucket (sub_820DCD70 ->
+       sub_820DDEE0 push). Found with a hardware write watchpoint (DR0 via SetThreadContext from a
+       helper thread + vectored handler, SPYRO_WATCHBUCKET=<0..10>) on render bucket 0's count:
+       buckets (scene +80..+120, 11, vt 0x82066F90..0x82067054: slot 1 clear, 2 empty?, 3 add
+       sub_820DCA38 -> sub_820DDE88 (used only when the scene is built), 6 draw) are emptied by
+       their draw routine (count = 0 at the end of sub_820DCA40) and refilled every frame.
+     - DRAW DISTANCE MAX: src\spyro_drawdist.cpp hooks sub_82109918: f1 x 16 (4x the distance)
+       when r7 = 1 and the setting is Max. SPYRO_DISTSCALE_TOGGLE (every other frame) +
+       SPYRO_DRAWPARITY: odd frames draw more (e.g. 437 vs 446 at the Avalar start). Setting row
+       is "Original / Max" again. Not yet confirmed by the user at the bandit camp; objects culled
+       by a whole quadtree cell (not reaching sub_82109918) would not come back.
+     - USER: Max still let the camp vanish; also flowers, rocks "fade into and out of existence".
+       SECOND CHECK FOUND: node type sub_820F02C8 calls sub_820F0CF0(group = node+36, node) before
+       handing its objects to sub_820F1130 / sub_82109918 (r7 = 0, so the per-object check is off
+       for them). Distance record [[[group]+24] + [group+36]*4]: +8 fade start^2, +12 max^2,
+       +16 fade rate per squared unit, +4 flags (bit 0: alpha byte, bit 1: fade alpha +92);
+       camera [[[0x82835904]+8]+56]+4 +64..+72 vs node [node+4] +128..+136. Past +12 the whole
+       group is dropped (returns 0), between +8 and +12 it fades. Max: the record is scaled for the
+       call (+8/+12 x16, +16 /16) and restored after (records are shared level data).
+       Parity test (SPYRO_DISTSCALE_TOGGLE): 412 -> 706 draws per frame. Avalar 1440p uncapped with
+       Max: 116-127 fps (Original 103-197 in a different view). Waiting for the user at the camp.
+     - USER: Max (x4) still pops further out ("I don't want any pop-in whatsoever") and the light
+       rays in Avalar went wrong. Avalar has only 9 distance records (SPYRO_LOGRECORDS): 7 props
+       (flags 0x1, fade 35..110 -> gone 50..140 units) and 2 effects: flags 0x3 (bit 1 = curved
+       "brightness" fade via powf, 17..40) and one fading from 1 unit (1..45, node flags
+       0x01C80209) - the light rays fade by design. Max now: props never fade or vanish (+8/+12 set
+       to 3e38 for the call), records with bit 1 or a fade start under 5 units untouched, and the
+       per-object check gets f1 = 1e30 (no limit). Avalar 1440p uncapped with Max: 131-163 fps.
+       Still to confirm with the user: no pop-in left, light rays back to normal. The render far
+       clip (~1500 units, hook inactive) is still in place.
+     - USER screenshot: palisade visible from afar, the camp's towers/huts still gone. The record
+       fading from 1 unit (1..45, node flags 0x01C80209) was treated as an effect and left alone -
+       it is the camp interior (stretching all records x4 had brought the towers back). Now only
+       records with flags bit 1 (curved brightness fade: 17..40, the light rays) keep their fade.
+     - USER: "the rays do not show until you get up to them" + screenshot of a yellow glare of light
+       shafts over the valley (build with only bit-1 records kept). Groups per record
+       (SPYRO_LOGRECORDS logs each group with its position): 1..45 = 17 groups scattered over the
+       level = THE LIGHT RAYS (fade out beyond 45: only visible close); 17..40 with the curved
+       fade (flags 0x3) = 178 groups = flowers/plants (NOT the rays as first thought); 80..110 108
+       groups, 45..70 43, 55..80 17, 40..50 24, 35..60 3, 110..140 10. Rule now: a record keeps its
+       fade only if it starts fading under 5 units (the rays); all others never fade/vanish with
+       Max. SPYRO_DISTKEEP=<fade start>,... keeps chosen records (research). The camp towers
+       (still missing in the user's screenshot from the build that kept 1..45 and bit-1 records)
+       are not confirmed yet - if still missing, a third mechanism.
+     - USER screenshots (far / near): camp towers, huts, flag still gone from afar with both
+       checks off. THIRD MECHANISM: zone-gated nodes. All walkers skip a node with +16 bit 2 set;
+       node type sub_820F0A70 sets it each frame unless the camera is inside one of its zones
+       ([+36], count +44), tested by sub_820F0480(zone, camera [[[0x82835904]+4]+4]+44 ->+56 ->
+       +4 +64): zone +28 & 3: 1 = sphere (centre +4..+12, half-size +16, radius^2 +20), 0 = box
+       (sub_820C2150), 3 = never. Max: sub_820F0480 returns 1 for SPHERE zones while inside
+       sub_820F0A70 (box zones untouched - rooms / swapped areas). Parity test: 351-425 -> 566-645
+       draws; Avalar 1440p uncapped with Max: 97-114 fps (~750 draws). Not confirmed by the user.
+     - 2026-10-31 session (research only; Max still behaves as the build above):
+       * USER: objects still vanish one by one further out; the user flew to and from the camp
+         while analysis\watch-shots.ps1 (new: PrintWindow screenshots of the PLAYER's game every
+         2 s, no input) captured it - near the camp the towers/huts/flags show, ~100+ units away
+         only the palisade remains. Scripted flights (run\tests\fly_away.txt) are unreliable
+         (boot timing drift; the to_gameplay.txt presses can land in the pause menu) - do not
+         rely on them; NEVER test while the user plays (their pad drives test windows).
+       * NEW RESEARCH CAMERA (spyro_lockon.cpp PullCamera, env only): SPYRO_CAMPULL=<units>[,rise]
+         pulls the camera back; with SPYRO_CAMFIX=ex,ey,ez,lx,ly,lz a FIXED eye/look-at (the
+         save starts with a camera flyover, so un-fixed shots never line up). The culling all
+         measures from the camera node, so this reproduces the user's far view. Avalar camp
+         centre ~(0,25,-60); towers at ~(-5,16,-70) and (-4,17,-66). Reference views:
+         near SPYRO_CAMFIX=10,34,0,0,25,-60 (everything shows), far 10,55,140,0,25,-60 (200
+         units: only palisade + one tower). Use SPYRO_CAMPULL=0.01,0 to enable the hook.
+       * Ruled out at the far view: camera service far input +0x568 (100 here; A/B no change),
+         render far clip x4 (SPYRO_FARSCALE), object vt slot 33 sub_8210ABD0 (0 rejections far;
+         SPYRO_VISALL), bucket add (sub_820DC520 / sub_820DCD70 just push).
+       * FOUND, not yet in Max: (a) sub_820F0CF0's frustum test sub_823B2FA8([0x8283553C],
+         group sphere +20) rejects on-screen groups near the camp from 200 units (SPYRO_LOGGROUPS:
+         e.g. sphere 24.9 41.7 -95.6 r 32 rejected) - the frustum seems to have a near far plane.
+         SPYRO_NOFRUSTUM (forces it true everywhere) brings back trees and the light ray but also
+         draws everything behind the camera (2685 objects vs 268) - need to find the frustum's
+         far plane instead. (b) Box zones (kind 0): SPYRO_ZONEBOX=1 un-hides whole areas.
+         Even with BOTH, the towers/huts stay missing.
+       * Towers: animated nodes (sub_820EB910 -> sub_820EB9C0 frustum; flags = particle/cloth
+         via sub_82100090 -> sub_820FB858). SPYRO_LOGANIM: the SAME 20 nodes near the towers are
+         visited near and far, same flags (0x304 / 0x500 / 0x2600) - so the cut is after the
+         visit: sub_820EB9C0's frustum result (r22) or the vt slot 32 (+128) draw of the node.
+         NEXT: log sub_820EB9C0's return for those node addresses near vs far; read the frustum
+         object at [0x8283553C] (+148: 6 planes x 20 bytes) to find its far plane and where it
+         is built (probably from a view distance ~150) - widening that plane, plus box zones,
+         is the likely real fix. Research env switches added this session (all off by
+         default): SPYRO_ZONEBOX(=2 alternate frames), SPYRO_NOFRUSTUM, SPYRO_VISALL,
+         SPYRO_LOGVIS, SPYRO_LOGOBJS (+ bucket), SPYRO_LOGGROUPS, SPYRO_LOGZONES, SPYRO_LOGANIM,
+         SPYRO_ANIMSHOW, SPYRO_CAMPULL, SPYRO_CAMFIX. Scratchpad tools: asm.py (prints a
+         function's PPC asm from generated\), objdiff.py (near/far object diff with named stacks).
+       * USER question (video comment): a hidden debug menu may toggle Shared Health / Shared
+         Mana - maybe also render/culling switches. Its strings are not in run\image_dump.bin
+         (that is D3D library data); look in the game's data files / xex strings later.
+     - 2026-10-31 (evening): FOURTH MECHANISM FOUND AND FIXED FOR MAX - the view frustum
+       ([0x8283553C], built by sub_823B1D20; tested only by sub_823B2FA8, 7 callers) has its FAR
+       plane at 150 units in Avalar (SPYRO_LOGANIM dumps the planes: near/far pair = the one pair
+       with opposite normals, test is normal.centre - d <= radius). Every group, animated node and
+       node object beyond 150 failed it - that, not distance records, was the remaining
+       "vanish one by one". Max now opens the near/far pair (+10000 on both d, side planes only)
+       for the call and restores it. Verified with the fixed research camera: at 100 units the
+       whole camp, towers, rocks, flowers, bushes and forest show on Max (Original misses most).
+       Not the cause (ruled out): render far clip (6690 units here; x10 no change), camera
+       service +0x568, plume upload limits (0 skipped), bucket capacity (they grow), D32 depth.
+       REMAINING ARTEFACT: from ~200 units the tree clusters along the camp's back wall (groups
+       with the 80..110 record, r 13-16, z -76..-82; SPYRO_FARSKIP=80 keeps them culled and the
+       wall shows again) cover the back palisade - very likely the trees' far LOD (a flat/low
+       model) that the original never shows that far. Object draw = sub_82109720 -> function
+       pointer at [[obj+28]+72] (not a vtable). Research added: SPYRO_FARMASK (1 groups,
+       2 animated, 4 node objects, 8 other), SPYRO_FARSKIP, SPYRO_LOGWALL, SPYRO_NOSPHERE.
+       Debug menu: no "debug menu" / "shared health" text in the game program (run\
+       image_dump.bin = the PE) or the level data (Data\*.KXE/.KCS/.RWS) - not found on 360.
+     - 2026-10-31 night / 11-01: MAX NOW = ALL FIVE MECHANISMS OFF (src\spyro_drawdist.cpp header
+       lists them): per-object limit, group records (light rays kept), sphere zones, BOX ZONES
+       (now on by default - from 400 units a whole forest was missing; SPYRO_ZONEBOX=0 = old),
+       and the frustum near/far pair opened (+10000 on both d for the call; the pair = the planes
+       with opposite normals, found once per frustum then checked with one dot product).
+       Checked hands-off at far views (Max vs Original, 4K uncapped, draws): 200 units 1654 vs 340,
+       300 behind 2450 vs 142, 300 side 1814 vs 219, 600 down the river 2862 vs 123, high above
+       2672 vs 131, far corner 2846 vs 191 - Max shows every tree, waterfall and the real river;
+       Original showed low-detail stand-ins. Nothing left hidden: no zone node hidden, only the
+       17 light-ray groups rejected, 31 animated nodes hidden at every distance (gameplay state,
+       e.g. inactive objects - flags 0x304 near and far). Black areas in such shots = outside the
+       level. Open: from ~200 units tree clusters along the camp's back wall (record 80..110)
+       overlap the palisade; same meshes near and far (no LOD), opaque with depth test - likely
+       just geometry the original never drew from there; for the user to judge in game.
+     - HANDS-OFF TESTS (user's request): env SPYRO_AUTOBOOT (src\test_input.cpp) presses through
+       the logos (START), main menu (DOWN to Load game, A), Load game (A on slot 1, or slot n with
+       SPYRO_AUTOBOOT=n via RIGHT), Game Menu / Single Player (A) by menu state - level in ~25 s.
+       CurrentMenuId() was stale on Load game (the frame hook does not run there): now also set
+       in the menu-update hook (spyro_hooks.cpp). Test snapshot project\run\tests\
+       testuser_avalar = the user's Avalar save in SLOT 1 (made in a test window 10-31; old one
+       kept as testuser_avalar_before_slot1). analysis\autotest-shots.ps1 -AutoBoot -Camera
+       "ex,ey,ez,lx,ly,lz" (fixed research camera, SPYRO_CAMPULL/CAMFIX); project\CAMERA-TEST.bat
+       for the user. analysis\watch-shots.ps1: screenshots of the PLAYER's game every N s.
+       NEVER test while the user plays - their controller drove some test windows (it looked
+       like auto boot worked on Load game when it did not).
+     - SPEED with Max (renderer CPU work per draw; GPU never the limit): SIMD index range /
+       rebasing, vertex sources fully hashed at most once a frame (+ every 8th frame for unchanged
+       ones, 64-sample spot check between), texture "checked this frame" before any decode work,
+       no clock reads around cached GuestReadable / SampleHash, per-draw part timers only with env
+       SPYRO_PLUMETIME, thread_local scratch vectors (no heap per draw), repeated setPipeline
+       skipped. 200-unit view 4K uncapped 50 -> 96 fps; 600 units (2862 draws) 54 -> 62 fps.
+       Note: the in-game profiler names plume code "sub_822E0C90" (the last guest-mapped host
+       function before it) - use analysis\profile_names.py with the .map for real names.
+     - 11-01: USER: "objects still slowly fade away the more you get away" (camp from the meadow).
+       Not culling: the game's DISTANCE FOG. Vertex constant c0 "u_f4Fog" (start, end, density)
+       in all 846 fog vertex shaders (checked offline with SpyroShaderRecomp: always packoffset
+       c0); fog = density * saturate((depth - start) / (end - start)). Avalar: 5 / 200 / 1 - fully
+       fogged at 200 units, made to hide the cut the original made there. Max (plume_renderer.cpp,
+       GuestShader::fog = container has "u_f4Fog"): the fog END goes 4x further (start kept, so
+       close haze looks the same) -> the camp is clear from 200 units. Many copies of the fog
+       values exist in recorded command data (SPYRO_FINDFOG scan) - changing it at upload is the
+       one place. Xenos renderers do not get this (plume only). obj+12 (dist^2 / 150^2,
+       sub_82109B38) is only the render buckets' sort key, not a fade.
+     - 11-01 later: USER (after the fog change): "the camp still disappears the further I'm out" -
+       "and it's not just the camp". OPEN. Repro (hands-off): same sight line through the camp
+       centre (0,20,-60) along (0.15,0.1,1): -Camera "7.5,25,-10,0,20,-60" (50 units) vs
+       "22.5,35,90,0,20,-60" (150). At 150 on Max the 2nd barrel flag tower, the thatched roof of
+       the hut between the towers and the right hut are missing (Original the same or worse).
+       RULED OUT for these: hero position (SPYRO_HEROPOS, new - holds Spyro/Cynder at x,y,z;
+       draws identical), all five culling overrides (+ SPYRO_NOFRUSTUM + SPYRO_VISALL, ZONEBOX 0,
+       NOSPHERE), the back-wall tree groups (DISTKEEP=80 / FARMASK=14), bucket contents
+       (SPYRO_LOGPUSH: every item pushed at 50 is pushed at 150), objects drawn
+       (SPYRO_LOGDRAWN: only 5 back-wall tree groups differ), draw calls (rd_50/rd_150 draw logs:
+       only particles differ; the skinned camp meshes - n 12408 x3, 13621, 13056, tex 0x425A7880
+       etc. - are drawn at 150 with the same transform, only view z +101). So the missing pieces
+       ARE submitted at 150: next step is GPU side - bisect draws at 50 with SPYRO_PLUMESKIP=a-b
+       to find the 2nd tower's / roof's draw, then compare its state (depth range, viewport z,
+       vertex positions after skinning) at 150. SPYRO_PLUMESKIPN=12408 (skip that mesh) changed
+       nothing visible at either distance. Also new: SPYRO_NODETYPES (scene node classes: walk /
+       render functions), SPYRO_LOGPUSH, SPYRO_LOGDRAWN + [spyro/objdraw] lines in draw-log
+       frames, SPYRO_WATCHADDR (DR0 watch on any guest word), SPYRO_FINDHERO, SPYRO_CAMFOV (no
+       effect: the game recomputes the fov), SPYRO_DUMPCAM. Tower-position nodes are "actor"
+       nodes (vt 0x82068418, walk sub_820EDFA8 leaf, render 0x82236A70 = blr): drawn by the
+       actor system, not the scene walk.
+     - 11-02: SIXTH MECHANISM FOUND - THE NEAR/FAR CAMERA HAND-OVER (GPU side, not culling).
+       * Player flights: play3 shots (01:50, Max) show the two barrel flag towers by the save beam
+         and the huts gone from the meadow. PLAY-LOGGING.bat was never used (no flight.log; the
+         node/sector logging of SPYRO_LOGNODES/LOGSECTORS is untested on a real flight). The
+         player switched Draw distance to ORIGINAL at 02:40 (run\recomp_settings.ini
+         draw_distance=0) - shots after that are not Max. Avalar has only 2 sector roots
+         (CSGSectorRoot vt 0x82068670), never hidden; the streaming (STREAMS\XEN*.KCS) idea is
+         unproven and not needed for the camp.
+       * Frame layout (tb_150 log): scene target 0x400483E0 (band 1280x256, predicated tiling)
+         draws #0..~52 = FAR CAMERA pass (own shaders vs 1840101F / 7A1C154E / 41BFD9FF, whole
+         level, low detail, no small props), Resolve -> texture (0x4002C020 here) WITHOUT clear,
+         ClearF z 1.0 (depth only), then #53..~1118 the NEAR pass on top, then post passes.
+       * 72 pixel shaders (all static world: terrain + buildings, e.g. ps 4D6C775E / A7AC0E78 /
+         8E454167 / 56AE103F; props, trees, characters do NOT have it) read
+         BackgroundRenderedTexture (= that far picture) and u_f2FarCameraAndTolerance (always
+         c28): w = saturate((c28.x - depth) / c28.y); colour = w * own + (1 - w) * far picture.
+         Avalar: hand-over at 150.0, tolerance 10.0 (= the frustum far plane). So beyond 150 the
+         near pass's world geometry SHOWS THE FAR PICTURE, which lacks the props -> "objects fade
+         out of existence" even though drawn (that is why every culling override and draw diff
+         looked fine). Checked offline: analysis\hlsl, all 72 use c28 the same way.
+       * Fix in plume_renderer.cpp (GuestShader::far_blend = container has
+         "u_f2FarCameraAndTolerance"; on Max c28.x = 1e30 at upload, logs "[plume] far camera
+         hand-over at X (tolerance Y)"). OPT-IN ONLY (env SPYRO_FARBLEND=1), not in the menu:
+         at 150 units barrel A gets full detail, but at 200 (camera 10,55,140 -> 0,25,-60, 4K
+         shots h200_off/h200_on) the front palisade becomes bare ground and the big rock pillar
+         right of the camp goes see-through - the near pass is still incomplete there and the far
+         picture had been covering it. NEXT: find what the near pass leaves out at ~200 (solo
+         mode below on the palisade candidates n 660 / 1539 / 2345 / 4859 (ps 4D6C775E) and
+         25839 (ps DC6C9609) at 50 vs 200), then turn the fix on for Max. The fix is engine-wide
+         (all levels, each level's own hand-over distance) - no per-object work.
+       * Camera-test pitfall: from (22.5,35,90) the second barrel is behind trees between camera
+         and camp (skipping the draws after the barrel batch brings it back) - real occlusion.
+         n 14990 / 16919 (skinned, ~70 bones, vs 28114F52) near the towers are characters, not
+         the towers; the barrels are static batch n 3560 (vs 01170BE2 ps 4D6C775E, world-space).
+       * New debug env (plume_renderer.cpp): SPYRO_PLUMEVSCONST=<n> (all non-zero vertex
+         constants of draws with n indices), SPYRO_PLUMENODEPTHN=<n> (no depth test for them),
+         SPYRO_PLUMEONLYN=<n>[,..] (only those depth-tested scene draws), SPYRO_FARBLEND=1.
+         Use SPYRO_PLUMEDRAWS_AT=<s> (seconds) for draw logs - frame numbers drift (a 4K run's
+         frame 2900 fell in the logos). Scratch tools: worldpos.py (draw origin from c1..c4 and
+         the CAMFIX camera), findpos.py, constdiff.py, drawconst.py, skiprun.ps1 (one hands-off
+         run + crop; -Resolution 3 for 4K), imgdiff.ps1 (which pixels a skipped draw owned).
+
+[128] 2026-11-08  NEW SESSION after the user reinstalled Windows (Claude re-read OVERVIEW + WORK_LOG; the
+     old testing screenshots are gone). Checked: TOOLS\env.ps1 exists, spyrodotd.exe exists (built 11-02
+     04:13, newer than src\spyro_drawdist.cpp), PLAY-LOGGING.bat exists. Nothing rebuilt yet.
+     USER CLARIFIED THE OPEN PROBLEM (2 new screenshots, Avalar river/waterfall valley, Max draw distance):
+     far mountainsides are BARE - no trees or vines - and the trees and vines POP IN one by one when
+     flying closer. The user's theory (entry 127, 11-02): areas are switched on/off by where SPYRO is
+     (sectors), not by camera distance.
+     CLAUDE'S REASONING: the far-camera hand-over (11-02) covers only the 72 world shaders (terrain,
+     buildings); trees/props do NOT use it, so trees that are submitted would show at any distance.
+     Whole trees missing => not submitted/loaded at all => points to the sector/streaming theory (or
+     another hide mechanism not found yet). UNPROVEN: SPYRO_LOGSECTORS / SPYRO_LOGNODES (src\
+     spyro_drawdist.cpp ~445-580, PLAY-LOGGING.bat) have never been run on a real flight.
+     NEXT: user flies toward such a mountainside with PLAY-LOGGING.bat, then sends project\run\logs\
+     flight.log; match [spyro/node] HIDDEN/shown lines (with the camera position lines) to the pop-in.
+
+[129] 2026-11-08  FIRST PLAYER FLIGHT WITH PLAY-LOGGING.bat (run\logs\flight.log, 21:46-21:49):
+     - WRONG SETTING: run\recomp_settings.ini draw_distance=0 (ORIGINAL) the whole run (still left
+       from 11-02 02:40). So this flight says nothing about Max.
+     - Even so: 2 sector roots, NEVER hidden. Every hidden-bit change was an effect that moves with
+       Spyro (vt 0x82068FB8 flags 0x3601/0x3005 flickering, vt 0x82069050, groups of 5 vt 0x82068210)
+       - no static scenery switched on/off. Hero went from (-229,2,-17) up to (-377,92,7).
+     - The old once-a-second camera line never printed (renderer-camera chain unreadable).
+     - LEVEL MIX-UP (user, 11-08): the PLAYER's slot 1 is LEVEL 2; the test snapshot
+       tests\testuser_avalar (AutoBoot) is LEVEL 3. All earlier hands-off camera tests were in level 3;
+       the user's tree/vine screenshots and this flight are in level 2. The Max fixes are engine-wide
+       but were only VERIFIED in level 3.
+     LOGGER IMPROVED (src\spyro_drawdist.cpp, src\spyro_lockon.cpp CameraHeroAndEye): once a second
+     "hero at x y z eye x y z, N nodes watched (n new, g gone), draw distance MAX|Original" (hero/eye
+     from the camera service); nodes first met are flushed once a second - more than 300 = one
+     "created at once (scene load)" line, fewer = each listed as NEW with class + position (catches
+     level parts created/streamed in, which the hidden-bit log could not). Built OK (toolchain fine
+     after the reinstall). Smoke test (level 3 test save, Max): hero/eye lines OK, 4827 nodes, 0 new /
+     0 gone while the hero moved ~70 units, 77 NEW lines (small trickles; not inspected).
+     NEXT: user sets Draw distance = Max, flies in level 2 toward a bare mountainside with
+     PLAY-LOGGING.bat; then compare NEW/gone/HIDDEN lines with the hero positions.
+
+[130] 2026-11-08  SECOND PLAYER FLIGHT (new logger, run\logs\flight.log 21:56-21:59, LEVEL 2, user's
+     slot 1). Original until t=90 s, then the user switched Draw distance to MAX (t=90-208 s). Repeated
+     flights up the waterfall chain, hero ~(-231,2,-20) -> (-384,84,-4) and back several times.
+     RESULT - SECTOR / STREAMING THEORY RULED OUT FOR LEVEL 2:
+     - The level's scene is built ONCE at load: "2676 nodes" appear in one burst at t=21 and the count
+       never changes - 0 new / 0 gone every second for 3 minutes of flight (both settings).
+     - 2 sector roots, never hidden.
+     - Hidden-bit changes only on the effect classes that move with Spyro (vt 0x82068FB8 / 0x82069050 /
+       0x82068210), the same on Original and Max. No static scenery node ever switched.
+     => Pop-in in level 2 is not the scene graph switching parts on/off; it is the culling checks
+       (Max turns five off) or the drawing side (far-camera hand-over, fog).
+     USER SCREENSHOT on Max (same waterfall spot as screenshot 1 which was bare): the far hillside now
+       shows trees, vines, pink crystals and glowing plants. So Max looks like it works at that view.
+       Asked the user whether anything still popped in on Max.
+
+[131] 2026-11-08  USER describes the level-2 hillside pop-in (on Max) like a PAINT BRUSH: detail does not
+     pop per object, it spreads across the hillside as a moving front while Spyro flies closer.
+     READING: that is the far-camera hand-over (entry 127, 11-02), not culling: the 72 world pixel
+     shaders show the low-detail far picture beyond c28.x (~150 units) and their own full detail
+     inside it, so the boundary sweeps over the terrain as the camera moves. Vines / ground detail on
+     the hillside are likely part of the terrain's own texture/geometry (blended), and the far picture
+     lacks the props. Max already turns all culling off, so this is what is left.
+     TEST: new project\PLAY-FARBLEND.bat (= PLAY.bat + SPYRO_FARBLEND=1; works only with Draw distance
+     MAX; log run\logs\farblend.log). The fix was opt-in because in LEVEL 3 at ~200 units the near pass
+     was incomplete (front palisade bare ground, rock pillar see-through). Asked the user to fly the same
+     waterfall route in level 2 and report (a) whether the brush effect is gone, (b) anything broken.
+
+[132] 2026-11-08  FARBLEND TEST IN LEVEL 2 (PLAY-FARBLEND.bat, run\logs\farblend.log 22:0x-22:11):
+     the fix WAS active - log: "[plume] far camera hand-over at 205.0 (tolerance 5.0) -> off (Draw
+     distance Max)". So level 2's hand-over distance is 205 units (level 3: 150 / tol 10).
+     User sent 3 screenshots (waterfall bottom -> higher -> higher, same hillside circled): the hillside
+     shows vines, pink crystals and the red lantern in all three; nothing obviously broken visible to
+     Claude. Shot 1 has an extra inner scribble inside the circle (meaning not stated). Asked the user
+     whether the brush effect is gone and what the inner mark shows.
+
+[133] 2026-11-08  LEVEL 2 SEE-THROUGH WALL HUNT (user: with PLAY-FARBLEND the hillside still "paints in", and
+     a see-through gap in the mountain shows what is behind it until close - their screenshot 1, inner mark).
+     TOOLS: Python was gone after the reinstall -> installed portable Python 3.15.2 (NuGet package) in
+     TOOLS\python, on PATH in TOOLS\env.ps1, added to _scripts\fetch-binaries.ps1 (user approved installing
+     tools into TOOLS). Build toolchain itself was fine.
+     TEST SAVE: run\tests\testuser_level2_slot1 = copy of the player's saves 11-08 (slot 1 = level 2);
+     autotest-shots.ps1 -AutoBoot -SaveBase testuser_level2_slot1 loads level 2 (hero starts -230,2,-20).
+     REPRO (hands-off, Max + SPYRO_FARBLEND=1, 1440p): sight line from the top of the waterfall climb
+     toward the crystal hillside: far  -Camera "-375,95,3,-85,18.5,3"  (hillside ~255 units),
+     near (60 closer) "-317,79.7,3,-85,18.5,3" (~195 units). Far: the rock wall under the vine ledge is
+     missing (trees seen where it should be, the small waterfall + cave right of it gone); near: solid.
+     Hillside objects ~(-128, 30..45, 20): crystal cluster = 12 x n112 vs C6880745 ps DC6C9609.
+     RULED OUT for the wall: level 2 has only 2 distance records (65..70, 310..320), neither under the
+     5-unit exception; SPYRO_NOFRUSTUM + SPYRO_VISALL (no change); every object drawn near is drawn far
+     (objdraw diff, scratch rayobjs.py) - the far-only objects are all between the two cameras; all 72
+     far-picture shaders use c28 (FARBLEND covers them all); render camera far clip x4 (already ~100000
+     units: SPYRO_FARSCALE=4 no change); the tree vertex shader 54F91F84 has no distance scaling.
+     KEY CLUE: the wall shows at ~195 units and not at ~255 - level 2's hand-over distance is 205.
+     So it is tied to the near/far split, but not via culling, objects or c28 as far as tested.
+     Draw-index pitfall: SPYRO_PLUMESKIP ranges shift +-10 per frame; skipping 790-845 hit the final
+     scene copy (#844 here) and gave black frames - keep ranges clear of the post passes.
+     Static terrain draws carry no object position ([spyro/objdraw]), so the wall's own draw is not
+     identified yet. NEXT: bisect the near view's depth-tested scene draws (#88..~790) with
+     SPYRO_PLUMESKIP to find the wall's draw, then compare that draw's state near vs far (vertex
+     positions/constants, depth, blend) - or check whether it is drawn only in the far-camera pass.
+
+[134] 2026-11-08  *** ROOT CAUSE OF THE REMAINING POP-IN FOUND AND FIXED (plume, Draw distance Max) ***
+     THE NEAR CAMERA'S PROJECTION FAR PLANE = THE HAND-OVER DISTANCE. The near pass is clipped by the GPU
+     at that distance (level 2: far 205.0 / near 0.205, level 3 Avalar: 150.0 / 0.15 - near = far x 0.001,
+     the game's camera rule in sub_820DA658). Everything past it comes from the low-detail far picture
+     left in the colour buffer (no props, holes where the near-only walls are). The moving clip edge is
+     the user's "paint brush". Culling, objects and shaders were all fine: the draws WERE issued.
+     HOW IT WAS FOUND: shader-group skips in the near view (SPYRO_PLUMESKIPPS - robust across frames,
+     unlike draw-index ranges) -> skipping ps 4D6C775E (static world, vs 01170BE2) removed the wall
+     exactly like the far view. Its shaders have no distance logic besides c28. Then the full vertex
+     constants of one world draw (SPYRO_PLUMEVSCONST=7802) in both frames: c1..c4 = WorldViewProj rows
+     x,y,z,w; row z = A*row w + (0,0,0,C) -> two frames give A = 1.0010003, C = -0.2049 -> far = C/(1-A)
+     = 204.9. (The SPYRO_FARSCALE hook in spyro_drawdist.cpp changes a DIFFERENT camera: scene
+     0x40047C20, far ~100000 = the far camera; that is why "far clip x4" never helped.)
+     FIX (plume_renderer.cpp, GuestShader::wvp = container has u_f44WorldViewProj; all 846 such vertex
+     shaders keep it in c1..c4): on Max, for perspective rows with far < 20000 and near ~= far x 0.001,
+     row z is rebuilt with the same near and far 100000 (logs "[plume] near camera far plane X (near Y)
+     -> 100000" once per value). A second perspective transform in level 2 (near 0.01 / far 998.7) is
+     left alone by the near = far x 0.001 rule. Only post pass reading depth: the scene copy (ps
+     20712164) copies colour + depth unchanged; later depth-tested draws use the same near camera, so
+     depth stays consistent.
+     DEFAULTS NOW (Max): far-picture blend off (c28.x = 1e30, was opt-in SPYRO_FARBLEND=1) + near far
+     plane 100000. Research off-switches: SPYRO_FARBLEND=0, SPYRO_NEARFAR=0. PLAY-FARBLEND.bat removed
+     (not needed any more).
+     VERIFIED hands-off: level 2 far view (255 units): wall, little waterfall, cave, crystals, trees all
+     show (= near view); level 2 near view unchanged; level 3 camp from 200 units (10,55,140 ->
+     0,25,-60): front palisade, towers, huts, flags and the rock pillar solid (old fix: bare ground +
+     see-through pillar). Speed, level 2 far view 1440p uncapped: 121 fps (old Max 146).
+     NOT VERIFIED: the user in real play (flights, cutscenes, other levels), Xenos renderers (plume only).
+     Scratch tools this session (scratchpad, not kept): drawdiff.ps1, psgroups.py, rayobjs.py (objects
+     on a sight line from [spyro/objdraw] lines), skipruns.ps1 (batch of hands-off runs + crops).
+
+[135] 2026-11-08  USER VERIFIED THE FIX IN REAL PLAY (normal PLAY.bat, Max): "the hillside renders correctly at any
+     distance and so does the entire camp" (screenshot: Avalar river with the camp in the distance, intact).
+     User asked whether every level must be tested: answered - the fix is engine-wide (applies to any draw
+     using a game render camera, each level's own distance found automatically), verified in levels 2 + 3;
+     no level-by-level test plan needed, just report anything odd while playing (far flicker, cutscenes,
+     indoor areas). Not yet in a release build.
+
+[136] 2026-11-08  QUIT TO DESKTOP PLANK FIXES (user: Game Menu plank "shows itself when the main menu loads in (the
+     fire swoosh)", Pause plank "sometimes see-through"; wants it to fade in tandem with the other options).
+     FOUND (SPYRO_LOGQUIT research logging, plume draw logs requested from game code):
+     - The plank kept the colour it was cloned with: billboard +0x34 RGBA, alpha = whatever the pause Options'
+       Sound plank had at that moment (0xBE seen; lower when it was mid-fade) -> "sometimes see-through";
+       never faded with the screen. The label (CText2d) colour is at +0x6F8 (RGBA; +0x30/+0x34 are text size
+       floats, NOT colour) - copied FFC73BC8 the same way.
+     - Screen fade lives in the rows' stone sprites (row +0x3C, alpha +0x37): Game Menu 0 -> 0xB4 (selected
+       0xFF), Pause 0 -> 0xFF, and back down on leaving. The ref sprite (row 5 +0x3C) is alpha 0 on the Game
+       Menu - no use as a fade source there.
+     - The fire swoosh = an opaque full-screen video quad drawn ~0.7 s AFTER the Game Menu has faded in; the
+       menu's pieces are not drawn in those frames, but the screen's piece list (plank, label, ref; caller
+       0x82118E78, plank drawn right before ref) still is. The game hides the ref sprite (+5 bit 1 = 0) for
+       those frames AFTER the menu update where PlaceQuitPlank copied the flag -> the plank stayed visible.
+     FIX (spyro_hooks.cpp): PlaceQuitPlank sets plank alpha = 0xFF x fade and label = gold 0xFFC73B, alpha
+     0xC8 (0xFF selected) x fade, fade = min(1, brightest row stone alpha / 0xB4); new hook sub_82112DB8
+     (CBillboard2d draw) copies the ref's visible bit to plank + label at draw time. Also new:
+     spyro::plume_renderer::RequestLogFrame() (like F9), tests\to_gamemenu.txt, tests\to_main_watch.txt.
+     VERIFIED hands-off + by the user ("yep it works. both"): the plank fades in with the stones, is gone in
+     the swoosh, comes in with the menu through the fading fire; Pause plank solid, selection + quit OK.
+     NOTE: the player's controller drives test windows too (XInput is global) - a "Quit to Desktop" the user
+     pressed went to a test window; their own game stayed open and locked spyrodotd.exe (link failed with
+     "permission denied"). Ask the user to close the game / not touch the pad before building or testing.
+[137] 2026-11-08  RELEASE PRE-ALPHA 2-1 (v0.2.1-prealpha, user's name "pre alpha 2-1": a small update fixing Draw
+     distance and the menus). Templates: RELEASE_NOTES (new: Draw distance Max works / no pop-in; Quit to
+     Desktop fixes), README.md + README.txt (Draw distance Original/Max, known issues). make-ship.ps1: the
+     patch git diffs now run with -c safe.directory=* (after the Windows reinstall the TOOLS\src repos belong
+     to the old account's SID -> "dubious ownership" -> EMPTY patches; now also a check that throws on an
+     empty patch). Zip 35.2 MB, repo 112 files; smoke test: unzipped release, SpyroRecomp.exe --game <folder>
+     -> plume ready, 1063 shaders, closed cleanly. GitHub: clone -> robocopy /MIR ship\repo -> 23 files
+     changed; commit as Minuteworld94 <Minuteworld94@users.noreply.github.com>, tag v0.2.1-prealpha.

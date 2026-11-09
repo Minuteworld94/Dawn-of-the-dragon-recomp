@@ -1,0 +1,6 @@
+# Quit to Desktop plank fade on the Game Menu (WORK_LOG 136): title -> main menu -> A (first row)
+# -> the Game Menu comes in with the fire swoosh; stays there.
+# <seconds> <buttons> [hold]
+20  START   # skips the Sierra logo
+27  START   # title: "Press the START button"
+32  A       # main menu, first row

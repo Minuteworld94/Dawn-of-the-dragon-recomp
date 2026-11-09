@@ -23,6 +23,7 @@ set(SPYRODOTD_SOURCES
     src/spyro_lockon.cpp
     src/spyro_profiler.cpp
     src/guest_memory.cpp
+    src/spyro_drawdist.cpp
 )
 
 if(WIN32)

@@ -40,7 +40,7 @@ PC settings live inside the game's own menus, under **Recomp Settings**:
 | Motion blur | On, Off |
 | Anti-aliasing | Off, FXAA, FXAA Extreme |
 | Bloom | Original, Off (plume renderer) |
-| Draw distance | Original (Max coming later) |
+| Draw distance | Original, Max (no pop-in: the whole level is drawn to the horizon; plume renderer) |
 | Lock-on camera | On, Off |
 | Online co-op | coming later |
 
@@ -64,7 +64,9 @@ each, on background threads) and kept in `bin\shader_cache`, so it is only done 
 ### Known issues
 
 - Gameplay has been tested through the first three levels; later areas may still have rendering bugs.
-- Draw distance (Max) and online co-op are not implemented yet.
+- Online co-op is not implemented yet.
+- Draw distance Max costs some speed in big open views (it draws far more), and needs the plume
+  renderer.
 - Only the USA/Europe release has been tested; the launcher warns about other versions.
 
 ## Building from source

@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -166,6 +167,75 @@ std::vector<Keystroke> BuildKeystrokes() {
 
 void MergeScript(PPCContext& ctx, uint8_t* base, uint32_t state);
 
+// Auto boot (env SPYRO_AUTOBOOT; project\PLAY-CONTINUE.bat, test runs): straight from the logos
+// into the last save, by menu state instead of fixed times (boot times vary from run to run):
+// START until the main menu (the logos and the title have no menu of their own - state 0x24 "no
+// menu", like gameplay), there DOWN to "Load game" (A on its first row, "New game", started a
+// new game - user), then A on every screen after it until the level. A tap 1.5 s after a screen
+// appears, then every 2 s while it stays; off for good once "no menu" comes back after the main
+// menu (the level), or after 3 min. The player's own controller keeps working alongside.
+bool AutoBoot() {
+  static const bool s_on = std::getenv("SPYRO_AUTOBOOT") != nullptr;
+  return s_on;
+}
+
+uint16_t AutoBootButtonsImpl();
+
+// Logs each tap once (start of the press).
+uint16_t AutoBootButtons() {
+  static uint16_t s_last = 0;
+  uint16_t b = AutoBootButtonsImpl();
+  if (b && b != s_last)
+    REXLOG_INFO("[spyro/input] auto boot: press 0x{:04X} in menu state 0x{:02X} at t={:.1f}s", b,
+                spyro::CurrentMenuId() & 0xFF, ScriptTime());
+  s_last = b;
+  return b;
+}
+
+uint16_t AutoBootButtonsImpl() {
+  static bool s_done = false, s_menus = false;
+  static int s_menu = -2;
+  static double s_entered = 0;
+  if (!AutoBoot() || s_done) return 0;
+  double t = ScriptTime();
+  int menu = spyro::CurrentMenuId();
+  s_menus |= menu == 0x09;  // the main menu: from here on, A until the level
+  if ((s_menus && menu == 0x24) || t > 180) {
+    s_done = true;
+    REXLOG_INFO("[spyro/input] auto boot: {} at t={:.1f}s", t > 180 ? "gave up" : "in the level", t);
+    return 0;
+  }
+  if (menu != s_menu) {
+    s_menu = menu;
+    s_entered = t;
+    REXLOG_INFO("[spyro/input] auto boot: menu state 0x{:02X} at t={:.1f}s", menu & 0xFF, t);
+  }
+  double since = t - s_entered;
+  // Main menu: "New game" is the first row - DOWN to "Load game", A, once each (a repeated A
+  // landed on the load screen, which stalls the game for ~10 s reading the saves, and loaded
+  // slot 1).
+  if (menu == 0x09) {
+    if (since >= 1.5 && since < 1.65) return 0x0002;  // DOWN
+    if (since >= 2.5 && since < 2.65) return 0x1000;  // A
+    return 0;
+  }
+  // Load game: slot 1 is highlighted - the test snapshot (tests\testuser_avalar) has the Avalar
+  // save there (user moved it to slot 1). Env SPYRO_AUTOBOOT=<n>: slot n instead (RIGHT n-1 times).
+  if (menu == 0x12) {
+    static const int s_slot = std::max(1, std::atoi(std::getenv("SPYRO_AUTOBOOT")));
+    for (int k = 0; k < s_slot - 1; ++k)
+      if (since >= 1.5 + k && since < 1.65 + k) return 0x0008;  // RIGHT
+    double a = 1.5 + s_slot;
+    if (since >= a && std::fmod(since - a, 3.0) < 0.15) return 0x1000;
+    return 0;
+  }
+  // START before the menus; after them A on every screen (the load-game list, its slot,
+  // Continue Story Mode, Single Player) until the level.
+  uint16_t want = !s_menus ? 0x0010 : menu != 0x24 ? 0x1000 : 0;
+  if (!want || since < 1.5) return 0;
+  return std::fmod(since - 1.5, 2.0) < 0.15 ? want : 0;
+}
+
 }  // namespace
 
 extern "C" {
@@ -175,7 +245,7 @@ extern "C" {
 REX_FUNC(sub_82412B48) {
   uint32_t user = ctx.r3.u32, caps = ctx.r5.u32;
   __imp__sub_82412B48(ctx, base);
-  if (!std::getenv("SPYRO_INPUTSCRIPT") || user != 0 || !caps || ctx.r3.u32 == 0) return;
+  if ((!std::getenv("SPYRO_INPUTSCRIPT") && !AutoBoot()) || user != 0 || !caps || ctx.r3.u32 == 0) return;
   std::memset(base + caps, 0, 20);
   base[caps] = 1;
   base[caps + 1] = 1;
@@ -188,6 +258,30 @@ REX_FUNC(sub_82412B48) {
 REX_FUNC(sub_82412C28) {
   uint32_t keystroke = ctx.r5.u32;
   __imp__sub_82412C28(ctx, base);
+  // Auto boot: the presses as keystroke events too (the title screen - and maybe others - read
+  // only those): key down when a tap starts, key up when it ends.
+  if (AutoBoot() && keystroke && ctx.r3.u32 != 0) {
+    static uint16_t s_down = 0;
+    uint16_t want = AutoBootButtons() & 0x0010;
+    if (want != s_down) {
+      // START only: the title screen reads keystrokes; the menus read the pad (a keystroke too
+      // would press twice).
+      static const std::pair<uint16_t, uint16_t> kKeys[] = {{0x0010, 0x5814}};
+      uint16_t changed = want ^ s_down, bit = 0, vk = 0;
+      for (auto [b, k] : kKeys)
+        if (changed & b) bit = b, vk = k;
+      if (vk) {
+        bool down = (want & bit) != 0;
+        s_down = uint16_t(down ? s_down | bit : s_down & ~bit);
+        std::memset(base + keystroke, 0, 8);
+        Store16(base, keystroke, vk);
+        Store16(base, keystroke + 4, down ? 1 : 2);
+        ctx.r3.u64 = 0;
+        return;
+      }
+      s_down = want;
+    }
+  }
   if (Script().empty() || !keystroke || ctx.r3.u32 == 0) return;
   static const std::vector<Keystroke> s_keys = BuildKeystrokes();
   static size_t s_next = 0;
@@ -208,6 +302,16 @@ REX_FUNC(sub_82412B50) {
   __imp__sub_82412B50(ctx, base);
   if (user != 0 || !state) return;
   MergeScript(ctx, base, state);
+  if (uint16_t auto_buttons = AutoBootButtons()) {
+    if (ctx.r3.u32 != 0) std::memset(base + state, 0, 16);  // no real pad: start from nothing
+    uint16_t buttons;
+    std::memcpy(&buttons, base + state + 4, 2);
+    Store16(base, state + 4, __builtin_bswap16(buttons) | auto_buttons);
+    static uint32_t s_packet = 0x40000000;  // a new packet number per tap, so the game notices
+    uint32_t packet = __builtin_bswap32(++s_packet);
+    std::memcpy(base + state, &packet, 4);
+    ctx.r3.u64 = 0;
+  }
   if (ctx.r3.u32 == 0) spyro::LockOnPad(base, state);
 }
 
