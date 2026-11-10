@@ -286,6 +286,10 @@ uncached VirtualQuery in our hooks (now src\guest_memory.cpp for everyone) and p
 decode of packed vertex formats (now plume's vertex cache). Profiler: env SPYRO_PROFILE=<s> +
 project\analysis\profile_names.py with out\build\...\spyrodotd.map.
 PRE-ALPHA 2 (2026-10-30, WORK_LOG 126): tag v0.2.0-prealpha pushed (commit f7a0779); release zip ship\release\SpyroRecomp-v0.2.0-prealpha.zip.
+PRE-ALPHA 2-1 (2026-11-08, WORK_LOG 134-137): small update - Draw distance Max fixed (near camera far plane),
+Quit to Desktop plank fades with the menu. Tag v0.2.1-prealpha pushed (commit 1784dd6); zip
+ship\release\SpyroRecomp-v0.2.1-prealpha.zip. Pushing after the Windows reinstall needs GCM sign-in allowed:
+set GCM_INTERACTIVE=always, GIT_TERMINAL_PROMPT=1, GCM_GUI_PROMPT=true for the push command.
 DRAW DISTANCE (in progress, WORK_LOG 127, src\spyro_drawdist.cpp): Recomp Settings "Draw distance:
 Original / Max". Max turns off all five ways the game hides far things (per-object limit, group fade
 records except the light rays, sphere and box zones, the 150-unit view frustum far plane). Far views are tested with the research camera env

@@ -1,14 +1,16 @@
 // Draw distance (WORK_LOG 127): Recomp Settings "Draw distance: Original / Max".
 //
-// The game hides far things five ways; Max turns off all of them (the user: no pop-in at all,
+// The game hides far things five ways; Max turns off four of them (the user: no pop-in at all,
 // everything on the map visible from anywhere), except the light rays' fade (they only show close
 // up in the original):
 //   1. per-object distance limit (sub_82109918),
 //   2. per-group fade / max distance records (sub_820F0CF0),
-//   3. sphere zones and 4. box zones: whole areas switched off while the camera is outside them
-//      (sub_820F0A70 / sub_820F0480),
+//   3. sphere zones (a view distance) - but NOT 4. box zones, which are area logic with content
+//      meant only for inside the box (sub_820F0A70 / sub_820F0480; WORK_LOG 138),
 //   5. the view frustum's far plane at 150 units (sub_823B2FA8) - while the picture is clipped
 //      much further out.
+// Plus, in plume_renderer.cpp: the near camera's projection far plane (= the hand-over distance)
+// moved out and the far-picture blend off (WORK_LOG 134).
 // The render camera's far clip (sub_820DA658, ~1500+ units) is not one of them: it stays.
 // Research switches (env SPYRO_*) are described at each hook; none is on by default.
 
@@ -330,11 +332,13 @@ extern "C" REX_FUNC(sub_820F0CF0) {
 // Max: sphere and box zones count as "inside" for these nodes, so their content shows from
 // anywhere (kind 3, "never", is left alone).
 bool g_in_zone_node = false;
+uint32_t g_zone_node = 0;
 
 extern "C" REX_EXTERN(__imp__sub_820F0A70);
 extern "C" REX_FUNC(sub_820F0A70) {
   uint32_t node = ctx.r3.u32;
   g_in_zone_node = true;
+  g_zone_node = node;
   __imp__sub_820F0A70(ctx, base);
   g_in_zone_node = false;
   // Research (env SPYRO_LOGZONES): zone nodes left hidden (+16 bit 2), once each, with their
@@ -358,19 +362,45 @@ extern "C" REX_FUNC(sub_820F0A70) {
 
 extern "C" REX_EXTERN(__imp__sub_820F0480);
 extern "C" REX_FUNC(sub_820F0480) {
-  uint32_t zone = ctx.r3.u32;
+  uint32_t zone = ctx.r3.u32, g_zone_cam = ctx.r4.u32;  // r4 = the camera position (3 floats)
   __imp__sub_820F0480(ctx, base);
   if (!g_in_zone_node || (ctx.r3.u32 & 0xFF) == 1) return;
   static const bool s_toggle = std::getenv("SPYRO_DISTSCALE_TOGGLE") != nullptr;
   bool max = s_toggle ? (g_frame_parity & 1) != 0 : spyro::GetSetting(spyro::kDrawDistance) == 1;
-  // Box zones too: whole stretches of the level are switched off while the camera is outside
-  // their boxes - from far away (user: "the further I get, the more disappears"; 796 -> 2767
-  // draws 400 units out). Research: SPYRO_ZONEBOX=0 leaves them alone, =2 every other frame.
-  static const int s_boxes = std::getenv("SPYRO_ZONEBOX") ? std::atoi(std::getenv("SPYRO_ZONEBOX")) : 1;
+  // Box zones are NOT forced any more (2026-11-09, WORK_LOG 138): they are area logic, not a view
+  // distance - their nodes hold content meant to be seen only from inside the box, e.g. level 1's
+  // giant backdrop card (one 380x320 quad, ps B8EA455F) that, forced, stood right behind the
+  // player and turned the whole hall behind the ledge black. Forcing them only ever helped
+  // research views 400+ units out (796 -> 2767 draws). Research: SPYRO_ZONEBOX=1 forces them,
+  // =2 every other frame.
+  static const int s_boxes = std::getenv("SPYRO_ZONEBOX") ? std::atoi(std::getenv("SPYRO_ZONEBOX")) : 0;
   bool boxes = s_boxes == 1 || (s_boxes == 2 && (g_frame_parity & 1));
   uint8_t kind = spyro::GuestReadable(base, zone, 0x20) ? base[zone + 28] & 3 : 3;
   static const bool s_no_sphere = std::getenv("SPYRO_NOSPHERE") != nullptr;  // research
-  if (max && ((kind == 1 && !s_no_sphere) || (boxes && kind == 0))) ctx.r3.u64 = 1;
+  bool force = max && ((kind == 1 && !s_no_sphere) || (boxes && kind == 0));
+  // Research (env SPYRO_LOGZONEFORCE, WORK_LOG 138): every zone the override turns from "outside"
+  // to "inside", once, with its node, raw fields and the camera position (r4 of the call).
+  static const bool s_log_force = std::getenv("SPYRO_LOGZONEFORCE") != nullptr;
+  if (s_log_force && force && spyro::GuestReadable(base, zone, 0x60)) {
+    static std::unordered_set<uint32_t> s_seen;
+    if (s_seen.size() < 400 && s_seen.insert(zone).second) {
+      std::string f;
+      for (uint32_t o = 4; o < 0x60; o += 4) f += fmt::format(" {:.1f}", LoadF(base, zone + o));
+      uint32_t cam = g_zone_cam;
+      bool cok = spyro::GuestReadable(base, cam, 12);
+      REXLOG_INFO("[spyro/zoneforce] zone 0x{:08X} kind {} node 0x{:08X} cam {:.0f} {:.0f} {:.0f} | +4..:{}", zone, kind, g_zone_node,
+                  cok ? LoadF(base, cam) : 0.0f, cok ? LoadF(base, cam + 4) : 0.0f, cok ? LoadF(base, cam + 8) : 0.0f, f);
+    }
+  }
+  // Research (env SPYRO_ZONEFORCE_ONLY=<n>): force only the n-th distinct zone (first-seen order).
+  static const int s_only = std::getenv("SPYRO_ZONEFORCE_ONLY") ? std::atoi(std::getenv("SPYRO_ZONEFORCE_ONLY")) : -1;
+  if (force && s_only >= 0) {
+    static std::vector<uint32_t> s_order;
+    auto it = std::find(s_order.begin(), s_order.end(), zone);
+    int idx = it == s_order.end() ? (s_order.push_back(zone), int(s_order.size()) - 1) : int(it - s_order.begin());
+    force = idx == s_only;
+  }
+  if (force) ctx.r3.u64 = 1;
 }
 
 // Research: slot 33 of the scene-object classes (0x82069558): 0 when the object's handle

@@ -2321,3 +2321,40 @@ NEXT STEPS (in order):
      empty patch). Zip 35.2 MB, repo 112 files; smoke test: unzipped release, SpyroRecomp.exe --game <folder>
      -> plume ready, 1063 shaders, closed cleanly. GitHub: clone -> robocopy /MIR ship\repo -> 23 files
      changed; commit as Minuteworld94 <Minuteworld94@users.noreply.github.com>, tag v0.2.1-prealpha.
+     PUSHED 2026-11-08: main f7a0779 -> 1784dd6 + tag v0.2.1-prealpha (verified with ls-remote). The first push
+     failed ("Cannot prompt because user interactivity has been disabled" - Git Credential Manager had no
+     login after the reinstall); it worked with GCM_INTERACTIVE=always, GIT_TERMINAL_PROMPT=1, GCM_GUI_PROMPT=true
+     set for the push (the user signs in in GCM's own window). Pre-filled release page (ship\RELEASE_LINK.txt)
+     opened for the user + Explorer at the zip; the user attaches ship\release\SpyroRecomp-v0.2.1-prealpha.zip
+     and publishes. Overview updated with the release.
+
+[138] 2026-11-09  BUG IN PRE-ALPHA 2-1 (user, level 1, after an enemy wave, side-on view of a ledge with pots): with
+     Draw distance MAX the whole hall behind the ledge (and a nearby pillar) is BLACK; Original shows it.
+     User's PLAY-LOGGING.bat flight + F9 frames: camera eye (-10,67,46) looking -x at hero (-18,64,46). No far-
+     camera pass there (one scene pass; 103 draws Original vs 116 Max). Repro hands-off: testuser_base (level 1)
+     -Camera "-10,67,46,-18,64,46" -> black on Max, fine on Original; SPYRO_ZONEBOX=0 -> fine.
+     CAUSE: the BOX ZONE override (forcing sub_820F0480 "camera inside" for kind-0 zones). Three box zones are
+     forced there (SPYRO_LOGZONEFORCE: zone record +4 corner, +16 corner, +28 kind; camera z=46 lies in the gap
+     between them); forcing only the first (x -150..-88, y 100..200, z -124..-64, node 0x426FFD34;
+     SPYRO_ZONEFORCE_ONLY=0) gives the black. Its node holds a GIANT BACKDROP CARD: one 4-vertex quad ~380 x 320
+     units (vs C3809414 ps B8EA455F, tex 256x256) standing at x ~ -20 right behind the player, meant to be seen
+     only from inside that box - plus far props (vs 1840101F / ps 27E5AB19).
+     => Box zones are AREA logic (content for inside the box, incl. fake backdrops), not a view distance.
+     FIX (spyro_drawdist.cpp): box zones are no longer forced on Max (default SPYRO_ZONEBOX=0; =1 research).
+     Sphere zones (radius = a view distance) stay forced. Header comment updated (Max = 4 of the 5 checks + the
+     plume near-far-plane / far-blend changes). Research added: SPYRO_LOGZONEFORCE, SPYRO_ZONEFORCE_ONLY=<n>.
+     VERIFIED hands-off (Max): level 1 user's view = hall + pillar like Original; level 2 hillside wall /
+     waterfall / cave from 255 units intact; level 3 camp from 200 units intact. Lost: only the research-only
+     400+ unit views where whole box-zoned areas were missing. Not yet tested by the user; not shipped.
+     The v0.2.1-prealpha tag on GitHub has the bug.
+     USER (11-09): don't ship anything yet - they will playtest more of the game on Max and press F9 at every
+     black box. PLAY-LOGGING.bat now names each session's log run\logs\flight_<yyyy-MM-dd_HHmmss>.log (was a
+     fixed flight.log, overwritten per session). Workflow for each report: find the F9 frames in the newest
+     flight_*.log, match them to the "hero at / eye" + "draw distance" once-a-second lines, recreate with
+     -Camera "<eye>,<hero>" on a test save of that level, compare Max/Original, diff the F9 frames
+     (scratch tools framepasses.py / framediff.py: pass structure, draws only on Max).
+[139] 2026-11-09  HOTFIX RELEASE (user: "push the buildfix on github, just call it a hotfix"): title "Pre-alpha 2-1
+     hotfix", tag v0.2.1-prealpha-hotfix. RELEASE_NOTES: a "Hotfix" section (Max no longer turns parts of a
+     level black; level 1 hall) above the 2-1 notes. make-ship -Version v0.2.1-prealpha-hotfix: zip 35.2 MB
+     (spyrodotd.exe built 22:03:26 after the box-zone change), patches OK; smoke test of the unzipped release:
+     plume ready, 1063 shaders, closed cleanly. Source commit = spyro_drawdist.cpp + release notes + docs.

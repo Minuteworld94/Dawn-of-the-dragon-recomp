@@ -1,8 +1,12 @@
-**Pre-alpha 2-1** of the Spyro: Dawn of the Dragon PC recomp - a small update that fixes Draw
-distance and the menus. Bring your own copy of the game (Xbox 360, USA/Europe disc) as an `.iso` or
-extracted files.
+**Pre-alpha 2-1 hotfix** of the Spyro: Dawn of the Dragon PC recomp. Bring your own copy of the game
+(Xbox 360, USA/Europe disc) as an `.iso` or extracted files.
 
-New in pre-alpha 2-1:
+Hotfix:
+- **Draw distance: Max** no longer turns parts of a level black. In level 1 the whole hall behind
+  the player (after one of the enemy waves) went black with Max; it now looks like Original, just
+  with the longer draw distance
+
+Also in this build (pre-alpha 2-1, a small update that fixed Draw distance and the menus):
 - **Draw distance: Max now works.** No more pop-in: trees, rocks, buildings and whole hillsides are
   drawn all the way to the horizon instead of appearing as you get close (Recomp Settings ->
   Draw distance -> Max; plume renderer)
