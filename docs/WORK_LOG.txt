@@ -2358,3 +2358,33 @@ NEXT STEPS (in order):
      level black; level 1 hall) above the 2-1 notes. make-ship -Version v0.2.1-prealpha-hotfix: zip 35.2 MB
      (spyrodotd.exe built 22:03:26 after the box-zone change), patches OK; smoke test of the unzipped release:
      plume ready, 1063 shaders, closed cleanly. Source commit = spyro_drawdist.cpp + release notes + docs.
+     PUSHED 2026-11-09: main 1784dd6 -> 41ba6d0 + tag v0.2.1-prealpha-hotfix (ls-remote checked); release page
+     (ship\RELEASE_LINK.txt) + Explorer at ship\release\SpyroRecomp-v0.2.1-prealpha-hotfix.zip opened for the user.
+
+[140] 2026-11-11  MSAA (plume) + FXAA REMOVED (user: MSAA 2x/4x/6x options, then "get rid of fxaa entirely").
+     FOUND: the old FXAA choices only set reXglue's swap_post_effect cvar, which does not exist with plume
+     ("could not set cvar swap_post_effect" every plume launch) -> plume had NO anti-aliasing at all. The 360
+     game itself uses 4x MSAA: 3 predicated-tiling bands of 1280x256, 4 samples x (colour + depth) = exactly
+     the 10 MiB EDRAM. 6x does not exist in D3D12 (1/2/4/8, 16 on few GPUs) -> options Off / MSAA 2x / 4x / 8x.
+     IMPLEMENTATION (plume_renderer.cpp): g.tiled_surfaces = surfaces bound during SetPredication (the scene
+     colour 0x400483E0 + depth 0x40048470); GetTarget gives them SceneSamples() samples (setting -> 1/2/4/8,
+     capped by getSampleCountsSupported() of the depth format AND all TargetFormat colour formats; RTX 3080
+     mask 0xF) and recreates a target when the count changes (live setting changes work); all other targets
+     stay 1x. Pipeline key + desc.multisampling carry the count; BindSurfaces drops depth if colour/depth
+     counts differ (logged once; never seen). Colour Resolve from an MSAA target = resolveTextureRegion
+     (AVERAGE) instead of copyTextureRegion; depth Resolve = new blit_r32_ms pipeline (present_blit.hlsl
+     PSDepthMS: Texture2DMS<float> g_TexturesMS[] at t0 space1 - the texture set is bound at spaces 0/1/2 -
+     copies sample 0; plume makes a TEXTURE2DMS SRV for views of MS textures). CMakeLists compiles PSDepthMS
+     into present_blit_depthms_ps.h.
+     SETTINGS (spyro_settings.cpp): row "Anti-aliasing" {Off, MSAA 2x, MSAA 4x, MSAA 8x}, NEW ini key "msaa"
+     (old "anti_aliasing" FXAA values not carried over); swap_post_effect code removed; MSAA = plume only.
+     TESTS (hands-off, no stray input): level 3 camp 720p Off/2x/4x/8x - same picture, 8x visibly smoother
+     poles/flags (the game's bloom/blur softens stills); uncapped 1440p camp from 200 units: 125 / 124 / 122 /
+     125 fps (CPU-bound - no GPU cost visible on the RTX 3080); level 1 user view + level 2 waterfalls (scene
+     refraction copy) with 4x = Off, no errors. Menu row shows "Anti-aliasing  Off" / "M S A A 4x".
+     NOTE: some test windows were driven by the user's controller (menu presses) - check logs for
+     "menu selection|input direction" lines before trusting a run.
+[141] 2026-11-11  RELEASE PRE-ALPHA 2.3 "the MSAA update" (user's naming; tag v0.2.3-prealpha). Notes: MSAA, FXAA gone,
+     plus the 2-1 + hotfix content, and the user's message: last update for a while (a few days to a few
+     weeks); next major update = achievements, more bug fixes, more testing, lock-on refinement, stability,
+     start on online co-op. README.md Anti-aliasing row updated.

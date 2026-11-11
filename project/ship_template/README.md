@@ -38,7 +38,7 @@ PC settings live inside the game's own menus, under **Recomp Settings**:
 | VSync | On, Off |
 | Display mode | Windowed, Borderless, Fullscreen |
 | Motion blur | On, Off |
-| Anti-aliasing | Off, FXAA, FXAA Extreme |
+| Anti-aliasing | Off, MSAA 2x, MSAA 4x, MSAA 8x (plume renderer; 4x = what the Xbox 360 used) |
 | Bloom | Original, Off (plume renderer) |
 | Draw distance | Original, Max (no pop-in: the whole level is drawn to the horizon; plume renderer) |
 | Lock-on camera | On, Off |

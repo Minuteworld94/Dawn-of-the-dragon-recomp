@@ -23,7 +23,9 @@ const SettingDef kDefs[kNumSettings] = {
     {"vsync", u"VSync", {u"On", u"Off"}, 2, 0},
     {"display_mode", u"Display mode", {u"Windowed", u"Borderless", u"Fullscreen"}, 3, 0},
     {"motion_blur", u"Motion blur", {u"On", u"Off"}, 2, 0},
-    {"anti_aliasing", u"Anti-aliasing", {u"Off", u"FXAA", u"FXAA Extreme"}, 3, 0},
+    // MSAA on the scene (plume_renderer.cpp SceneSamples; WORK_LOG 140). New ini key: the old
+    // "anti_aliasing" held FXAA choices (Xenos only, removed) - not carried over as MSAA.
+    {"msaa", u"Anti-aliasing", {u"Off", u"MSAA 2x", u"MSAA 4x", u"MSAA 8x"}, 4, 0},
     {"bloom", u"Bloom", {u"Original", u"Off"}, 2, 0},                  // plume_renderer.cpp
     {"draw_distance", u"Draw distance", {u"Original", u"Max"}, 2, 0},  // spyro_drawdist.cpp
     {"lockon_camera", u"Lock-on camera", {u"On", u"Off"}, 2, 0},  // spyro_lockon.cpp
@@ -90,14 +92,11 @@ void ApplyPluginSettings() {
     REXLOG_INFO("[spyro/settings] Xenos resolution_scale in effect: {}", rex::cvar::GetFlagByName("resolution_scale"));
   }
   ApplyFrameRate();
-  static const char* kEffects[] = {"none", "fxaa", "fxaa_extreme"};
-  SetCvar("swap_post_effect", kEffects[g_values[kAntiAliasing]]);
 }
 
 void Apply(int id) {
   switch (id) {
     case kFrameRate:
-    case kAntiAliasing:
       if (g_plugin_applied) ApplyPluginSettings();
       break;
     case kVSync:
@@ -106,8 +105,9 @@ void Apply(int id) {
     case kDisplayMode:
       ApplyDisplayMode();
       break;
-    default:  // Renderer: next launch. Motion blur: read by its hook. Resolution: plume reads it
-              // every frame, Xenos at the next launch. Co-op: not yet.
+    default:  // Renderer: next launch. Motion blur: read by its hook. Resolution and MSAA: plume
+              // reads them every frame (MSAA plume only), Xenos the resolution at the next launch.
+              // Co-op: not yet.
       break;
   }
 }

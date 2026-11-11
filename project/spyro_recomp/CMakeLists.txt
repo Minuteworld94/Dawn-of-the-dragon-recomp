@@ -59,11 +59,14 @@ file(MAKE_DIRECTORY "${SPYRO_SHADER_OUT}")
 set(SPYRO_BLIT_HLSL "${CMAKE_CURRENT_SOURCE_DIR}/src/shaders/present_blit.hlsl")
 add_custom_command(
     OUTPUT "${SPYRO_SHADER_OUT}/present_blit_vs.h" "${SPYRO_SHADER_OUT}/present_blit_ps.h"
+           "${SPYRO_SHADER_OUT}/present_blit_depthms_ps.h"
     COMMAND "${SPYRO_DXC}" -nologo -T vs_6_0 -E VSMain -Vn g_present_blit_vs -Fh "${SPYRO_SHADER_OUT}/present_blit_vs.h" "${SPYRO_BLIT_HLSL}"
     COMMAND "${SPYRO_DXC}" -nologo -T ps_6_0 -E PSMain -Vn g_present_blit_ps -Fh "${SPYRO_SHADER_OUT}/present_blit_ps.h" "${SPYRO_BLIT_HLSL}"
+    COMMAND "${SPYRO_DXC}" -nologo -T ps_6_0 -E PSDepthMS -Vn g_present_blit_depthms_ps -Fh "${SPYRO_SHADER_OUT}/present_blit_depthms_ps.h" "${SPYRO_BLIT_HLSL}"
     DEPENDS "${SPYRO_BLIT_HLSL}"
     COMMENT "Compiling plume present shader")
-add_custom_target(spyro_plume_shaders DEPENDS "${SPYRO_SHADER_OUT}/present_blit_vs.h" "${SPYRO_SHADER_OUT}/present_blit_ps.h")
+add_custom_target(spyro_plume_shaders DEPENDS "${SPYRO_SHADER_OUT}/present_blit_vs.h" "${SPYRO_SHADER_OUT}/present_blit_ps.h"
+                  "${SPYRO_SHADER_OUT}/present_blit_depthms_ps.h")
 add_dependencies(spyrodotd spyro_plume_shaders)
 target_include_directories(spyrodotd PRIVATE "${SPYRO_SHADER_OUT}")
 

@@ -45,3 +45,14 @@ float4 PSMain(VsOut i) : SV_Target
     }
     return float4(c, 1.0);
 }
+
+// MSAA (WORK_LOG 140): a multisampled depth buffer -> the R32_FLOAT texture of a depth Resolve.
+// The same texture descriptors are bound at space0, 1 and 2 (plume_renderer.cpp CreateLayout),
+// so space1 can view them as multisampled textures. Sample 0 is copied (the target is the same
+// size as the depth buffer: one pixel each).
+Texture2DMS<float> g_TexturesMS[] : register(t0, space1);
+
+float4 PSDepthMS(VsOut i) : SV_Target
+{
+    return g_TexturesMS[g_Texture].Load(int2(i.pos.xy), 0).xxxx;
+}
