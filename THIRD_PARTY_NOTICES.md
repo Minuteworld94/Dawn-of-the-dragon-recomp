@@ -11,6 +11,7 @@ are in the `licenses` folder of each release and in the projects' own repositori
 | [D3D12 Memory Allocator](https://github.com/GPUOpen-LibrariesAndSDKs/D3D12MemoryAllocator) | GPU memory, via plume | MIT |
 | [XenosRecomp](https://github.com/hedge-dev/XenosRecomp) (commit `990d03b`, forked in `project/shader_recomp`) | translating the game's shaders | MIT |
 | [DirectX Shader Compiler](https://github.com/microsoft/DirectXShaderCompiler) (`dxcompiler.dll`, `dxil.dll`, v1.9.2609) | compiling translated shaders, at build time and in the game for shaders missing from the cache | LLVM Release License (dxcompiler) / Microsoft (dxil) |
+| [stb_truetype](https://github.com/nothings/stb) (the copy bundled with Dear ImGui, `imstb_truetype.h`) and [stb_image](https://github.com/nothings/stb) | achievements overlay: font rasterising (Segoe UI, read from Windows - no font is shipped) and decoding the achievement icons from the player's own game | MIT or public domain (author's choice) |
 | Microsoft Visual C++ runtime (`msvcp140*.dll`, `vcruntime140*.dll`) | C++ runtime shipped next to the game | Microsoft Visual Studio redistributable terms |
 
 *The Legend of Spyro: Dawn of the Dragon* is © Activision. No part of the game is included in

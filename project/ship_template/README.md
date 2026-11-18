@@ -32,6 +32,7 @@ PC settings live inside the game's own menus, under **Recomp Settings**:
 
 | Setting | Choices |
 |---|---|
+| Achievements | (a button) opens the achievements list |
 | Resolution | 720p, 1080p, 1440p, 4K |
 | Renderer | plume (default), Xenos, Xenos - Vulkan (takes effect on the next start) |
 | Frame rate | 30, 60, 120, Unlimited |
@@ -45,6 +46,21 @@ PC settings live inside the game's own menus, under **Recomp Settings**:
 | Online co-op | coming later |
 
 Settings are saved in `bin\recomp_settings.ini`, saves in `user`, logs in `logs`.
+
+### Achievements
+
+All 50 of the game's achievements (1000 G) are earned as you play: the game reports them the way
+it did on the Xbox 360, and they are saved in `user\achievements`.
+
+- **Popup**: Xbox 360 style, with the main menu's fire as its background and the menu's fire whoosh
+  as its sound. Both are taken from your own copy of the game when the Game Menu comes in (nothing
+  from the game is shipped). Several unlocks at once show one after another.
+- **List**: press **1** on the keyboard, or *Recomp Settings → Achievements*. Up / Down scrolls,
+  LB / RB pages, B or 1 closes.
+- **Reset**: press **Delete** and pick *Yes* (No is picked when the question opens). The old state
+  is kept as `user\achievements\565507F9.before_reset.toml`.
+
+The popup and the list are drawn by the plume renderer.
 
 ### Extras
 
@@ -67,6 +83,8 @@ each, on background threads) and kept in `bin\shader_cache`, so it is only done 
 - Online co-op is not implemented yet.
 - Draw distance Max costs some speed in big open views (it draws far more), and needs the plume
   renderer.
+- After an achievements reset, an achievement comes back only when the game reports it again (for
+  things already done in a save, that means doing them again).
 - Only the USA/Europe release has been tested; the launcher warns about other versions.
 
 ## Building from source
@@ -116,7 +134,7 @@ Windows 10/11 x64. Everything is portable (nothing is installed system-wide).
 
 | Path | What |
 |---|---|
-| `project/spyro_recomp/src` | Everything hand-written: renderer (`plume_renderer.cpp`, `plume_hooks.cpp`), runtime shader translation (`shader_translator.cpp`), Recomp Settings menu (`spyro_hooks.cpp`, `spyro_settings.cpp`), texture decoding, debug tools |
+| `project/spyro_recomp/src` | Everything hand-written: renderer (`plume_renderer.cpp`, `plume_hooks.cpp`), runtime shader translation (`shader_translator.cpp`), Recomp Settings menu (`spyro_hooks.cpp`, `spyro_settings.cpp`), achievements overlay (`spyro_achievements.cpp`, `spyro_ui.cpp`, `spyro_sound.cpp`), texture decoding, debug tools |
 | `project/spyro_recomp/*.toml` | reXglue codegen manifest and function boundaries |
 | `project/launcher` | `SpyroRecomp.exe`: game picker, ISO unpacker (XDVDFS), version check |
 | `project/shader_recomp` | SpyroShaderRecomp, a fork of XenosRecomp adapted to this game |

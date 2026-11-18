@@ -1,4 +1,4 @@
-=====================================================================
+﻿=====================================================================
 READ WHEN YOU LOSE CONTEXT  -  PROJECT OVERVIEW
 The Legend of Spyro: Dawn of the Dragon (Xbox 360) - Native PC Recomp
 =====================================================================
@@ -217,7 +217,7 @@ Phase 3  Recompile with rexglue (config TOML, function boundaries, jump tables,
          NEXT: confirm what the window shows, fix whatever blocks the title screen.
          UPDATE: Milestone 1 done (plays to the Golem fight). Flicker deferred (Xenia-inherited).
 
-CURRENT FOCUS (2026-10-25, user's choice: FULLY NATIVE): a "Recomp Settings" row inside the
+[HISTORY - long done; see section 6 CURRENT STATE] CURRENT FOCUS (2026-10-25, user's choice: FULLY NATIVE): a "Recomp Settings" row inside the
 game's own Options -> Video ("Display Options") menu, built from copies of the game's own UI
 objects at runtime (project\spyro_recomp\src\spyro_hooks.cpp). It is drawn natively below
 Gamma; selection and a stable label are the open issues. The exact next steps are at the END
@@ -239,9 +239,56 @@ Milestone 2 = title screen through our own renderer with no Xenia GPU code linke
 ---------------------------------------------------------------------
 6. WHERE THINGS STAND RIGHT NOW
 ---------------------------------------------------------------------
-See the bottom of READ_WHEN_YOU_LOSE_CONTEXT_WORK_LOG.txt for the latest entries.
-At the time this file was written: toolchain and SDK are done; the user is
-preparing the game dump; nothing has been analyzed yet.
+See the bottom of READ_WHEN_YOU_LOSE_CONTEXT_WORK_LOG.txt for the latest entries. The dated
+paragraphs further down are history (oldest first); THIS block is the current state.
+
+=== CURRENT STATE (updated 2026-11-18) ===
+LATEST RELEASE: Pre-alpha 2.3 "the MSAA update", tag v0.2.3-prealpha, commit 0d1b3d5 (WORK_LOG 140-141).
+  Earlier: v0.1.0 (10-27), v0.2.0 (10-30), v0.2.1 "2-1" (11-08), v0.2.1-prealpha-hotfix (11-09).
+  Told players: last update for a while (days to weeks).
+NEXT MAJOR UPDATE (user's plan, 11-11): ACHIEVEMENTS, more bug fixes, more testing, lock-on camera
+  refinement, stability, and the START of online co-op.
+ACHIEVEMENTS (11-18, WORK_LOG 143-146; NOT SHIPPED YET): unlocks = reXglue SDK's AchievementManager
+  (catalog from the XEX, saved in <user>\achievements\565507F9.toml). Our overlay (src\spyro_ui,
+  src\spyro_achievements, drawn by plume after the game picture): Xbox-360-style popup whose
+  background is the main menu swoosh's FIRE (captured by plume on the Game Menu each session) and
+  whose sound is the swoosh's fire WHOOSH (recorded from the game's own audio mix on the Game Menu,
+  src\spyro_sound, played with PlaySound); list screen from the 1 key or the "Achievements" row at the
+  top of Recomp Settings (word only; A opens; B closes). Delete = reset all (Yes/No question, WORK_LOG 148).
+  Test: project\TEST-ACHIEVEMENT-POPUP.bat.
+  Both need plume (Xenos renderer: ember gradient, no whoosh) and one pass through the Game Menu.
+GAME STATE: plume (own D3D12 renderer) is the default and draws everything; the game plays through
+  at least the first three levels. Recomp Settings rows (12): Achievements (button), Resolution,
+  Renderer, Frame rate, VSync, Display mode, Motion blur, Anti-aliasing (Off/MSAA 2x/4x/8x, ini key
+  "msaa", plume only), Bloom, Draw distance (Original/Max), Lock-on camera, Online co-op ("On - soon",
+  not implemented).
+  Quit to Desktop plank on the Game Menu and Pause screens (fades with the menu).
+DRAW DISTANCE MAX (final, WORK_LOG 134 + 138): per-object limit, group fade records (light rays
+  kept), sphere zones and the frustum far plane are off; plume moves the near camera's projection
+  far plane out and turns the far-picture blend off. BOX ZONES ARE NOT FORCED (area logic with
+  backdrop cards - forcing them blacked out level 1's hall). The user is playtesting later levels
+  on Max: their F9 frames land in run\logs\flight_<date>_<time>.log (PLAY-LOGGING.bat).
+WORKING RULES LEARNED THE HARD WAY:
+  - The user's game must be CLOSED before building (spyrodotd.exe is locked otherwise: link error
+    "permission denied"). Ask; close it for them only with their OK (CloseMainWindow first).
+  - Their CONTROLLER drives every game window, test windows too (XInput is global). Ask them not to
+    touch it during tests; reject runs whose log has "menu selection|input direction" lines, or
+    whose menus move with no "[spyro/input] ... buttons" script press. Tell them when a run starts
+    and when it is done (they press buttons otherwise - they said so, 11-18).
+  - A REX_FUNC override in a file without the generated headers MUST be extern "C" (extern "C"
+    REX_FUNC(sub_X)), or it silently does not replace the game function (WORK_LOG 146).
+  - Hands-off tests: analysis\autotest-shots.ps1 -AutoBoot -SaveBase <snapshot> [-Set "key=v"]
+    [-Camera "ex,ey,ez,lx,ly,lz"]. Snapshots in run\tests: testuser_base (level 1),
+    testuser_level2_slot1 (level 2), testuser_avalar (level 3). Never the player's own saves.
+  - Pushing to GitHub: clone to the scratchpad, robocopy /MIR ship\repo over it, commit as
+    Minuteworld94 <Minuteworld94@users.noreply.github.com>, push with GCM_INTERACTIVE=always,
+    GIT_TERMINAL_PROMPT=1, GCM_GUI_PROMPT=true. Then open the pre-filled releases/new link
+    (ship\RELEASE_LINK.txt); the user attaches the zip and publishes.
+  - make-ship.ps1 passes -c safe.directory=* to git (the TOOLS\src repos belong to the pre-reinstall
+    Windows account) and refuses empty patches.
+  - Python: TOOLS\python (3.15.2, portable). Build: . TOOLS\env.ps1; cd project\spyro_recomp;
+    cmake --build --preset win-amd64-release.
+=== end of current state ===
 
 LOCAL SDK EDITS (2026-10-25, WORK_LOG 98) - re-apply if the reXglue SDK is ever re-fetched:
   TOOLS\src\rexglue-sdk\src\graphics\graphics_system.cpp   (swap_post_effect change callback)
@@ -290,8 +337,9 @@ PRE-ALPHA 2-1 (2026-11-08, WORK_LOG 134-137): small update - Draw distance Max f
 Quit to Desktop plank fades with the menu. Tag v0.2.1-prealpha pushed (commit 1784dd6); zip
 ship\release\SpyroRecomp-v0.2.1-prealpha.zip. Pushing after the Windows reinstall needs GCM sign-in allowed:
 set GCM_INTERACTIVE=always, GIT_TERMINAL_PROMPT=1, GCM_GUI_PROMPT=true for the push command.
-DRAW DISTANCE (in progress, WORK_LOG 127, src\spyro_drawdist.cpp): Recomp Settings "Draw distance:
-Original / Max". Max turns off all five ways the game hides far things (per-object limit, group fade
+DRAW DISTANCE (history, WORK_LOG 127, src\spyro_drawdist.cpp; final state in CURRENT STATE above -
+box zones are no longer forced): Recomp Settings "Draw distance:
+Original / Max". Max turned off all five ways the game hides far things (per-object limit, group fade
 records except the light rays, sphere and box zones, the 150-unit view frustum far plane). Far views are tested with the research camera env
 SPYRO_CAMPULL / SPYRO_CAMFIX (fixed eye/look-at), never by scripted flying.
 REMAINING CAUSE (found 11-02): the game draws a low-detail FAR CAMERA picture first, then the

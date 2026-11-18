@@ -25,13 +25,23 @@ SETTINGS (resolution up to 4K, frame rate, VSync, window mode, ...)
     - in a level: pause > Options > the "Recomp Settings" plank left of "Tutorial"
   The Renderer setting takes effect the next time you start the game.
 
+ACHIEVEMENTS
+  All 50 of the game's achievements, earned as you play; a popup shows each one you unlock
+  (with the main menu's fire and fire whoosh).
+  List of all achievements: press 1 on the keyboard, or Recomp Settings > Achievements (top row).
+    Up / Down scrolls, LB / RB pages, B or 1 closes.
+  Reset all achievements: press Delete on the keyboard, then pick Yes (it asks first; No is
+  picked when it opens). A copy of the old state is kept in user\achievements as
+  565507F9.before_reset.toml.
+  The popup and list need the default renderer (plume).
+
 EXTRAS
   Lock-on camera: click the right stick (R3) near enemies; click again to let go.
   Quit to Desktop: the plank at the bottom of the Game Menu and the Pause screen (press DOWN
   from the last stone).
 
 WHERE THINGS ARE
-  user\      your saves
+  user\      your saves, and your achievements (user\achievements)
   logs\      a log of each session (the last 10 are kept)
   bin\       the game program, recomp_settings.ini (your settings) and the shader caches
              (shaders not in spyro_shaders.bin are translated on first use into bin\shader_cache)

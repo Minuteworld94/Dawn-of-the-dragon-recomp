@@ -2388,3 +2388,129 @@ NEXT STEPS (in order):
      plus the 2-1 + hotfix content, and the user's message: last update for a while (a few days to a few
      weeks); next major update = achievements, more bug fixes, more testing, lock-on refinement, stability,
      start on online co-op. README.md Anti-aliasing row updated.
+     PUSHED 2026-11-11: main 41ba6d0 -> 0d1b3d5 + tag v0.2.3-prealpha (ls-remote checked). Zip 35.2 MB, smoke test OK
+     (plume ready, 1063 shaders, fresh ini has msaa=0). Release page (title 'Pre-alpha 2.3 - the MSAA update') +
+     Explorer at ship\release\SpyroRecomp-v0.2.3-prealpha.zip opened for the user to attach and publish.
+
+[142] 2026-11-18  NEW WORK BLOCK: the next major update (achievements first). User asked to make sure the context
+     files exist and a log exists: both READ_WHEN_YOU_LOSE_CONTEXT_*.txt exist, the log is complete through [141].
+     OVERVIEW: section 6 now starts with a "CURRENT STATE (updated 2026-11-18)" block (latest release, next-update
+     plan, settings rows, draw distance final state, working rules: close the game before building, controller
+     interference, hands-off test saves, GitHub push recipe, safe.directory, Python/build commands); stale
+     paragraphs (Oct "CURRENT FOCUS", draw distance "in progress") marked as history.
+[143] 2026-11-18  ACHIEVEMENTS RESEARCH. The reXglue SDK already has a full achievement system: AchievementManager
+     (catalog from the XEX's XDBF at boot - KernelState::LoadAchievementsData; unlocks persisted to
+     <user>\achievements\565507F9.toml; RegisterUnlockCallback / RegisterNotificationCallback; facade
+     rex/system/achievements.h: RegisterAchievement / UnlockAchievement / IsAchievementUnlocked), XAM hooks
+     (xam_user.cpp achievement enumerator, xgi_app), and ImGui overlays (achievement_toast, achievements_overlay,
+     icon cache loading icons/<image_id>.png). The GAME'S OWN unlocks already work: the player's file has ids 3
+     (Escaped the Catacombs), 4 (Enchanted Forest), 34 (Combo Maker). With plume nothing is VISIBLE: the SDK's
+     ImGui overlays go through reXglue's presenter, which plume replaces (to confirm).
+     CATALOG: rexglue.exe init --project-name x --xex-path <xex> --project-root <dir> achievements <xex> <dir>
+     (the parent's required options must be given; the subcommand claims the action) wrote 50 achievements +
+     50 icons + title.png into the SCRATCHPAD (game data: never into the repo/release - read from the player's
+     own XEX at runtime). Ids 3..52; e.g. 14 "Complete the game" 130G, 16 "Buddy System" (2-player), 20-23
+     enemy counts, 34-36 combos, 37 "Unattainable" (dodge all Golem attacks), 51/52 no-death boss kills.
+[144] 2026-11-18  ACHIEVEMENTS UI, part 1 (user's design: Xbox-360-style popup but with the menu-transition FIRE as
+     the panel background and the fire WHOOSH instead of the 360 chime; list of all achievements in a Recomp
+     Settings section AND toggled with the 1 key).
+     NOT ImGui: reXglue's ImGuiDrawer (rexruntime.dll exports ImGui) calls ImGui::SetCurrentContext in its window-
+     thread input handlers -> a second ImGui user on the render thread would race the global context.
+     NEW src\spyro_ui.{h,cpp}: immediate 2D layer - rects / rounded rects / gradients / outlines / images /
+     rounded images / text (Segoe UI regular+semibold+bold read from %WINDIR%\Fonts - nothing shipped; baked
+     with ImGui's bundled imstb_truetype.h, STBTT_STATIC, 40 px, 2x2 oversampling, chars 32..255, one
+     2048x2048 R8 atlas shown as white+alpha via view swizzle), clip stack, texture queue (ui ids; 0 = white).
+     NEW src\shaders\ui_overlay.hlsl (pos in pixels, uv, colour; texture by push constant) -> CMake dxc step.
+     plume_renderer.cpp: g.ui_pipeline (alpha blend, swapchain format), g.ui_textures, UploadUiTextures() +
+     DrawUi() in Present after the game picture; BuildOverlay gets the window size + the 16:9 picture rect.
+     NEW src\spyro_achievements.{h,cpp}: catalog from the SDK (ListAchievements; 50, 1000 G), icons = PNGs from
+     the player's own XEX XDBF (kImage, image_id) decoded with stb_image (STB_IMAGE_STATIC, PNG only); popup
+     queue fed by AchievementManager::RegisterNotificationCallback (registered on the first game frame); popup =
+     round badge rises in, opens into a pill (icon, "Achievement unlocked", "<gs>G - <name>"), ~6 s, closes;
+     background = fire frames if set (SetFireFrames) else ember gradient; list = dimmed screen, panel with
+     title, "x of 50 unlocked  y / 1000 G", progress bar, scrolling rows (icon - dimmed when locked, name,
+     description / unachieved description, gamerscore, unlock date / "Locked"), footer hints.
+     INPUT: 1 / numpad 1 toggles (game window focused); while open the XInputGetState hook (test_input.cpp)
+     hands the pad to the list (Up/Down, stick, LB/RB page, B / Back / Esc close) and gives the game a neutral
+     pad; after closing, the pad stays captured until all buttons are released (InputCaptured).
+     RECOMP SETTINGS: new 12th row "Achievements" (kAchievements, values "Press A"; kNumSettings 12): A ->
+     SendRowEvent hook (sub_822C2B50 event 1) / left-right -> RecompMenuRowEvent -> achievements::OpenList().
+     TEST SWITCHES: SPYRO_ACHTEST=<id>[,<s>] shows a popup (no unlock), SPYRO_ACHLIST=<s> opens the list.
+     tests\to_recomp_achievements.txt (pause -> Options -> Recomp -> UP UP -> A -> scroll -> B).
+     VERIFIED (screenshots): popup and list render crisply at 1440p; the list opened from Recomp Settings on the
+     main menu was scrolled with a controller (the user's, driving the test window) and the menu behind did not
+     react. NOT YET: fire background, whoosh sound, closing-with-B check without stray input.
+     FIRE SOURCE: no separate movie is opened at the main menu -> Game Menu transition (noisy trace: logos
+     XEN_065/071/072/073, title XEN_003, main menu XEN_004 at 0x09; nothing at 0x06) -> the fire is a section
+     of the main menu background movie XEN_004.VID. Plan: capture its frames in plume while the swoosh plays.
+     Noisy file trace: --log_level trace --log_noisy=true (only once on the command line - a duplicate
+     --log_level makes the exe quit).
+[145] 2026-11-18  ACHIEVEMENTS ROW MOVED TO THE TOP (user: "i just want the word and i want that to be at the very
+     top of the list"). spyro_settings.h: kAchievements is now the FIRST enum value (row 0); kDefs[0] =
+     {"achievements", u"Achievements", {u""}, 1, 0}; Save() skips it (never written to recomp_settings.ini).
+     spyro_hooks.cpp PlaceSettingsRows: on that row the value text and both arrows (pieces 1..3) are moved off
+     screen (x = -10); RecompMenuRowEvent ignores left/right on it; A still goes through the SendRowEvent hook
+     (sub_822C2B50 event 1) -> achievements::OpenList(). Old ini files still load (keys are matched by name).
+     VERIFIED (run rt.log, screenshots rt_68/rt_86): "Achievements" is the top row, just the word, no value,
+     no arrows; left/right on it changed nothing (no settings line); A opened the list. That run was driven
+     by the user's controller through the MAIN MENU Display Options path (not the pause path the script
+     planned) - same menu code, so it counts; the "1 key" toggles in it were keyboard presses, not a bug.
+[146] 2026-11-18  ACHIEVEMENT POPUP: MENU FIRE BACKGROUND + FIRE WHOOSH (user's design, WORK_LOG 144).
+     FIRE (plume_renderer.cpp "menu fire capture"): XEN_004.VID is Bink 1 ("BIKi"), 1280x720, 50 fps, NO audio
+     track. On the Game Menu (state 0x06) the swoosh frames are the movie quad alone (ps 4DA82A254F362344, the
+     game's plain 2D shader; g.video_quads counts it) - 2-3 draws for ~40 frames: old screen (1 frame), white
+     flash, orange fire; the menu comes in at 5 draws, 37 once up. plume blits each such frame (rows 0.2..0.8,
+     960x324, max one per 1/60 s, up to 48) into a readback buffer, reads them 3 frames later, keeps frames
+     with brightness >= 140 that differ from the last kept one (max 32), "settle" = first frame <= 200
+     (bright flash before it), needs >= 6 steady frames (else retries on the next Game Menu), fps from the
+     capture times (~36-40). achievements::SetFireFrames(frames, w, h, settle, fps) makes spyro_ui textures
+     (~30 MB, once per session, nothing on disk). DrawFire: the flash plays at movie speed into the middle
+     of the steady frames, then a sine swing through them (peak 18 frames/s, crossfaded = slow-motion fire);
+     the visible slice (80% of the band's width) drifts with two slow sine waves. Overlay gradient 0.08..0.42
+     black + text drop shadows. Research: env SPYRO_FIREDUMP=<folder> (BMPs + frames.txt).
+     WHOOSH (NEW src\spyro_sound.{h,cpp}): the sound is in LVL000.KXE (compressed main menu data, not loaded
+     in levels) -> recorded from the game's own final mix instead. sub_8269E428 = the audio frame submit
+     (256 samples x 6 ch, big-endian float, planar FL FR C LFE SL SR, 48 kHz; frame pointer = local
+     r1-112+88, still readable after return) - hooked with extern "C" REX_FUNC (WITHOUT extern "C" the
+     override silently does not link over the generated weak symbol!). The mix is silent or only quiet fire
+     ambience (~0.012 RMS, noise, no music) when the Game Menu comes in; the whoosh = two bursts (fire in /
+     out, up to ~0.35), ~2 s decay; it starts ~0.25 s BEFORE the 0x06 switch when A on the main menu goes
+     straight there (via 0x12 it starts with the switch). Recording: 0.6 s pre-roll, until 2.8 s after the
+     switch / menu changes / pad press (PadActivity, test_input.cpp XInputGetState hook) / key press
+     (KeyPressed, XInputGetKeystroke hook); dropped if the first 0.15 s is louder than 0.05 or < 0.9 s;
+     attack = first 5 ms over max(0.04, 4x before); a cut recording loses 50 ms; 30% cosine fade-out; kept
+     as an in-memory WAV. PlayWhoosh() = PlaySoundW(SND_MEMORY|SND_ASYNC) when a popup starts (winmm).
+     Research: SPYRO_AUDIODUMP=<wav>[,from,to] (the mix), SPYRO_WHOOSHDUMP=<wav> (the recording).
+     NEW project\TEST-ACHIEVEMENT-POPUP.bat: SPYRO_ACHTEST=3,60,30 (third field new: repeat every N s).
+     VERIFIED hands-off (snd8): fire captured (27 frames), whoosh recorded 2.98 s (peak 0.53, before 0.012),
+     test popup showed the fire and "whoosh played" (PlaySound ok). NOT verified by ear - the user must listen.
+     NOTE: the user presses buttons on their controller while my test windows run (they said so) - say when a
+     run starts and ask for hands off; runs where menus move without script presses are disturbed.
+[147] 2026-11-18  REAL UNLOCK PATH VERIFIED + QUEUE (user tested the popup: "i'm happy with how it turned out").
+     The game reports unlocks the 360 way: XMsg to the XGI app, message 0xB0002 XGIUserWriteAchievements
+     (xgi_app.cpp) -> KernelState::UnlockAchievement -> AchievementManager::UnlockAchievement(kShow): saves the
+     toml, then the notification callbacks (ours queues the popup). Old logs show the game sending ids 34 and
+     3 this way. An already unlocked id returns kAlreadyUnlocked: NO popup (the game re-sends 34, a combo one,
+     often). NEW test switch SPYRO_ACHUNLOCK=<id>[+<id>...],<s>: REAL unlocks through that same SDK call (test
+     runs only - they use the throwaway run\testuser). Run unlock1 (-AutoBoot, level 1): 3+5+14 at once ->
+     three popups one after another, 6 s each, each with the whoosh; toml saved; list "4 of 50 unlocked,
+     185 / 1000 G" with dates. The fast AutoBoot menu path recorded a whoosh peaking 1.05-1.09 (mix > 1.0):
+     the recording is now scaled to peak 0.9 at most (gain logged).
+[148] 2026-11-18  DELETE KEY = RESET ALL ACHIEVEMENTS, WITH A YES / NO QUESTION (user's request).
+     spyro_achievements.cpp: Delete in the focused game window (also over the list; not while asking) opens
+     "Reset all achievements?" - dimmed screen, panel, text with the current count ("you have X unlocked, Y G"),
+     Yes / No buttons, NO PICKED WHEN IT OPENS. Left / Right (D-pad, stick, arrow keys) pick, A / Enter / Space
+     confirm, B / Back / Esc / N cancel; held buttons/keys at opening do nothing. While asking the pad belongs
+     to the question (InputCaptured), the list behind ignores input, the 1 key is ignored; closing sets
+     g_wait_release + list prev-input so the A/B never reaches the game or closes the list. Yes -> notice "All
+     achievements have been reset" (fades after ~2.6 s). The list footer now shows "Delete: reset all".
+     RESET (no SDK reset call, no SDK edit): copy <user>\achievements\565507F9.toml to
+     565507F9.before_reset.toml (latest reset only), then AchievementManager::SetUnlockSavePath(same path)
+     (clears the in-memory unlocks) + SaveUnlockState() (writes the file with none). Path = Runtime::
+     user_data_root() / "achievements" / "<title id>.toml" (as kernel_state.cpp builds it).
+     NOTE: the game only reports an achievement when it happens (and re-sends some, e.g. the combo #34), so
+     ones for things already done in a save come back only when the game sends them again.
+     Test switch SPYRO_ACHRESET=<s>[,<s>...] (opens the question); tests\reset_achievements.txt (-AutoBoot,
+     A at 42 = No, LEFT 50 + A 52 = Yes). VERIFIED (reset2): No -> cancelled, file unchanged; Yes -> toml empty,
+     backup holds 34/3/5, list "0 of 50"; the opens' source is now logged ("Delete key" / "test switch") -
+     run reset1 had two unexplained extra opens (no source logged then; most likely a key press).

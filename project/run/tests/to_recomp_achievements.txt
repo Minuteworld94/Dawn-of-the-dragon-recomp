@@ -1,0 +1,24 @@
+# Achievements row in Recomp Settings (WORK_LOG 144): load the save (as to_pause.txt), pause (0x0F)
+# -> Options (pause Options 0x17) -> Recomp Settings (0x22) -> "Achievements" is the first row (selected on entry):
+# RIGHT does nothing -> A opens the list -> DOWN scrolls it -> B closes it (the menu must stay).
+# <seconds> <buttons> [hold]
+20  START   # skips the Sierra logo
+27  START   # title: "Press the START button"
+32  A       # main menu
+37  A
+42  A
+47  A
+@24 6    START   # pause
+@0F 1.5  DOWN    # Moves
+@0F 2.2  DOWN    # Armor
+@0F 2.9  DOWN    # Elements
+@0F 3.6  DOWN    # Options
+@0F 4.5  A       # -> pause Options
+@17 1.5  DOWN    # Tutorial
+@17 3    LEFT    # Recomp Settings button
+@17 5    A       # -> Recomp Settings
+@22 4.0  RIGHT   # nothing may happen (no value, no arrows)
+@22 7.0  A       # opens the list
+@22 10.0 DOWN    # list: next entry
+@22 11.0 DOWN
+@22 14.0 B       # closes the list (Recomp Settings stays)

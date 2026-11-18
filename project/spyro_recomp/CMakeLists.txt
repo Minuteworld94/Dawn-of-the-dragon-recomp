@@ -24,6 +24,9 @@ set(SPYRODOTD_SOURCES
     src/spyro_profiler.cpp
     src/guest_memory.cpp
     src/spyro_drawdist.cpp
+    src/spyro_ui.cpp
+    src/spyro_achievements.cpp
+    src/spyro_sound.cpp
 )
 
 if(WIN32)
@@ -45,8 +48,11 @@ endif()
 set(PLUME_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../TOOLS/src/plume")
 add_subdirectory("${PLUME_DIR}" plume EXCLUDE_FROM_ALL)
 target_link_libraries(spyrodotd PRIVATE plume)
-# xxHash (header only) for plume's vertex cache.
-target_include_directories(spyrodotd PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../TOOLS/src/rexglue-sdk/thirdparty/xxHash")
+# xxHash (header only) for plume's vertex cache; stb_truetype (ImGui's bundled copy) and stb_image
+# (header only, compiled privately in spyro_ui.cpp / spyro_achievements.cpp) for the overlay UI.
+target_include_directories(spyrodotd PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../TOOLS/src/rexglue-sdk/thirdparty/xxHash"
+                           "${CMAKE_CURRENT_SOURCE_DIR}/../../TOOLS/src/rexglue-sdk/thirdparty/imgui"
+                           "${CMAKE_CURRENT_SOURCE_DIR}/../../TOOLS/src/rexglue-sdk/thirdparty/stb")
 if(WIN32)
     target_link_libraries(spyrodotd PRIVATE d3d12 dxgi dxguid)
 endif()
@@ -65,8 +71,16 @@ add_custom_command(
     COMMAND "${SPYRO_DXC}" -nologo -T ps_6_0 -E PSDepthMS -Vn g_present_blit_depthms_ps -Fh "${SPYRO_SHADER_OUT}/present_blit_depthms_ps.h" "${SPYRO_BLIT_HLSL}"
     DEPENDS "${SPYRO_BLIT_HLSL}"
     COMMENT "Compiling plume present shader")
+set(SPYRO_UI_HLSL "${CMAKE_CURRENT_SOURCE_DIR}/src/shaders/ui_overlay.hlsl")
+add_custom_command(
+    OUTPUT "${SPYRO_SHADER_OUT}/ui_overlay_vs.h" "${SPYRO_SHADER_OUT}/ui_overlay_ps.h"
+    COMMAND "${SPYRO_DXC}" -nologo -T vs_6_0 -E VSMain -Vn g_ui_overlay_vs -Fh "${SPYRO_SHADER_OUT}/ui_overlay_vs.h" "${SPYRO_UI_HLSL}"
+    COMMAND "${SPYRO_DXC}" -nologo -T ps_6_0 -E PSMain -Vn g_ui_overlay_ps -Fh "${SPYRO_SHADER_OUT}/ui_overlay_ps.h" "${SPYRO_UI_HLSL}"
+    DEPENDS "${SPYRO_UI_HLSL}"
+    COMMENT "Compiling plume overlay UI shader")
 add_custom_target(spyro_plume_shaders DEPENDS "${SPYRO_SHADER_OUT}/present_blit_vs.h" "${SPYRO_SHADER_OUT}/present_blit_ps.h"
-                  "${SPYRO_SHADER_OUT}/present_blit_depthms_ps.h")
+                  "${SPYRO_SHADER_OUT}/present_blit_depthms_ps.h"
+                  "${SPYRO_SHADER_OUT}/ui_overlay_vs.h" "${SPYRO_SHADER_OUT}/ui_overlay_ps.h")
 add_dependencies(spyrodotd spyro_plume_shaders)
 target_include_directories(spyrodotd PRIVATE "${SPYRO_SHADER_OUT}")
 

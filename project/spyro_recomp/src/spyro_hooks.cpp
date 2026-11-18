@@ -37,6 +37,7 @@
 
 #include "guest_memory.h"
 #include "plume_renderer.h"
+#include "spyro_achievements.h"
 #include "spyro_settings.h"
 
 namespace {
@@ -991,6 +992,9 @@ void PlaceSettingsRows(uint8_t* base) {
       if (p == 0 && sound_host) x = vx + kSoundLabelDx;
       if (p == 1) x = value_x;
       if (p == 2 || p == 3) x = ax[p - 2];
+      // "Achievements" is a plain button row (WORK_LOG 144): just the word - its (empty) value
+      // text and its arrows are parked off-screen; the highlight glows stay.
+      if (i == spyro::kAchievements && p >= 1 && p <= 3) x = -10.0f;
       Store32F(base, s.ours[p] + 0x14, x);
       Store32F(base, s.ours[p] + 0x18, y + dy);
     }
@@ -1987,6 +1991,7 @@ void RecompMenuRowEvent(PPCContext& ctx, uint8_t* base, uint32_t row, uint32_t s
     GuestCall(ctx, base, sub_822C2B50, g_recomp.menu, row, 0, 0);
     s_refreshing = false;
   }
+  if (pressed && row == spyro::kAchievements) return;  // left / right on "Achievements": nothing (A opens it)
   if (pressed && row < kNumSettings) {
     SettingRow& s = g_settings[row];
     s.value = base[s.row + 0x338];
@@ -2364,6 +2369,7 @@ REX_FUNC(sub_822AAF70) {
   HideQuitPlanks(base);
   spyro::OnGameFrame();  // Recomp Settings: frame-rate limiter, plugin settings on frame 1
   spyro::LockOnFrame(base);
+  spyro::achievements::OnGameFrame();  // unlock popups (WORK_LOG 144)
   if (g_manager && GuestReadable(base, g_manager + 0xAC0, 0x20)) g_current_menu_id.store(base[g_manager + 0xACD]);
   static auto s_t0 = std::chrono::steady_clock::now();
   static int s_frames = 0;
@@ -2409,6 +2415,12 @@ REX_FUNC(sub_822C2B50) {
       ExitToDesktop();
       return;
     }
+  // A on the Recomp Settings "Achievements" row: open the achievements list (WORK_LOG 144).
+  if (g_recomp.built && g_recomp.recomp_mode && menu == g_recomp.menu && row == uint32_t(spyro::kAchievements) &&
+      event == 1) {
+    spyro::achievements::OpenList();
+    return;
+  }
   __imp__sub_822C2B50(ctx, base);
   if (g_igo.menu && menu == g_igo.menu && row == kIgoHidden) {
     REXLOG_INFO("[spyro/recomp] pause Options: Recomp Settings button event {} (from LR 0x{:08X}, selection {} +0x60 {})",

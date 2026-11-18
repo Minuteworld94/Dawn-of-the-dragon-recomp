@@ -15,6 +15,7 @@ namespace spyro {
 
 // Menu order (top to bottom); kDefs in spyro_settings.cpp follows it.
 enum SettingId {
+  kAchievements,  // not a setting: a plain "Achievements" row at the top; A opens the list (WORK_LOG 144)
   kResolution,
   kRenderer,
   kFrameRate,
@@ -28,7 +29,7 @@ enum SettingId {
   kOnlineCoop,
 };
 
-constexpr int kNumSettings = 11;
+constexpr int kNumSettings = 12;
 constexpr int kMaxValues = 4;
 
 struct SettingDef {

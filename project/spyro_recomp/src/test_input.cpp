@@ -28,7 +28,9 @@
 #include <string>
 #include <vector>
 
+#include "spyro_achievements.h"
 #include "spyro_settings.h"
+#include "spyro_sound.h"
 
 extern "C" {
 REX_EXTERN(__imp__sub_82412B50);
@@ -258,6 +260,12 @@ REX_FUNC(sub_82412B48) {
 REX_FUNC(sub_82412C28) {
   uint32_t keystroke = ctx.r5.u32;
   __imp__sub_82412C28(ctx, base);
+  // A real key press ends the whoosh recording early, like a pad press (spyro_sound.cpp).
+  if (keystroke && ctx.r3.u32 == 0) {
+    uint16_t flags;
+    std::memcpy(&flags, base + keystroke + 4, 2);
+    if (__builtin_bswap16(flags) & 1) spyro::sound::KeyPressed();
+  }
   // Auto boot: the presses as keystroke events too (the title screen - and maybe others - read
   // only those): key down when a tap starts, key up when it ends.
   if (AutoBoot() && keystroke && ctx.r3.u32 != 0) {
@@ -313,6 +321,32 @@ REX_FUNC(sub_82412B50) {
     ctx.r3.u64 = 0;
   }
   if (ctx.r3.u32 == 0) spyro::LockOnPad(base, state);
+  if (ctx.r3.u32 == 0) {  // a press ends the whoosh recording early (spyro_sound.cpp, WORK_LOG 146)
+    uint16_t b;
+    int16_t x, y;
+    std::memcpy(&b, base + state + 4, 2);
+    std::memcpy(&x, base + state + 8, 2);
+    std::memcpy(&y, base + state + 10, 2);
+    spyro::sound::PadActivity(__builtin_bswap16(b), int16_t(__builtin_bswap16(uint16_t(x))),
+                              int16_t(__builtin_bswap16(uint16_t(y))));
+  }
+  // Achievements list open (WORK_LOG 144): the list gets the pad, the game a neutral one.
+  if (spyro::achievements::InputCaptured()) {
+    uint16_t buttons = 0;
+    int16_t lx = 0, ly = 0;
+    if (ctx.r3.u32 == 0) {
+      std::memcpy(&buttons, base + state + 4, 2);
+      std::memcpy(&lx, base + state + 8, 2);
+      std::memcpy(&ly, base + state + 10, 2);
+      buttons = __builtin_bswap16(buttons);
+      lx = int16_t(__builtin_bswap16(uint16_t(lx)));
+      ly = int16_t(__builtin_bswap16(uint16_t(ly)));
+    }
+    spyro::achievements::PadInput(buttons, lx, ly);
+    if (ctx.r3.u32 == 0) std::memset(base + state + 4, 0, 12);  // buttons, triggers, sticks
+  } else {
+    spyro::achievements::PadInput(0, 0, 0);
+  }
 }
 
 }  // extern "C"

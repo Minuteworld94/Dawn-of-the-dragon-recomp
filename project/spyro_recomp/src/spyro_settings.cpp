@@ -15,6 +15,9 @@ namespace spyro {
 namespace {
 
 const SettingDef kDefs[kNumSettings] = {
+    // A button row, not a setting: just the word, no value, no arrows (spyro_hooks.cpp); A opens
+    // the achievements list. Never written to the settings file.
+    {"achievements", u"Achievements", {u""}, 1, 0},
     // The menu font has no brackets; "-" renders (it is in "Anti-aliasing").
     // Xenos = reXglue's Xbox 360 GPU emulation (from Xenia) on D3D12, or on Vulkan.
     {"resolution", u"Resolution", {u"720p", u"1080p", u"1440p", u"4K"}, 4, 0},
@@ -46,7 +49,8 @@ std::atomic<double> g_frame_time{0.0};
 void Save() {
   std::ofstream out(kFile, std::ios::trunc);
   out << "# Recomp Settings (written by the game; value = index into the menu's choices)\n";
-  for (int i = 0; i < kNumSettings; ++i) out << kDefs[i].key << "=" << g_values[i].load() << "\n";
+  for (int i = 0; i < kNumSettings; ++i)
+    if (i != kAchievements) out << kDefs[i].key << "=" << g_values[i].load() << "\n";
 }
 
 void Load() {
