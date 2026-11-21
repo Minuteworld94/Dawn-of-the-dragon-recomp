@@ -51,7 +51,8 @@ class SpyroDotdApp : public rex::ReXApp {
     if (spyro::PlumeActive() && window())
       spyro::plume_renderer::SetWindow(window()->GetNativeWindowHandle());
     // Keyboard and mouse controls: mouse motion and the wheel come from the window (WORK_LOG 150).
-    spyro::controls::Attach(window());
+    // The screens' parchment is read from the game's files (LVL000.KXE, WORK_LOG 154).
+    spyro::controls::Attach(window(), game_data_root());
   }
   // void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {}
   // std::unique_ptr<rex::ui::ImGuiDialog> CreateAchievementsOverlay() override;

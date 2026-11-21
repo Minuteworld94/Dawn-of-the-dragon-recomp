@@ -23,6 +23,10 @@ TOOLS/*
 !TOOLS/_scripts/
 !TOOLS/env.ps1
 !TOOLS/README.md
+# our .KXE unpacker (source only; its output is game data - never commit it)
+!TOOLS/kxe/
+TOOLS/kxe/*.exe
+TOOLS/kxe/*.obj
 TOOLS/_scripts/*.log
 
 # --- local play / test data ---

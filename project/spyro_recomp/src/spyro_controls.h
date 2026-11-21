@@ -18,6 +18,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 
 namespace rex::ui {
 class Window;
@@ -36,9 +37,10 @@ struct Pad {
 };
 
 // Startup: read controls.ini (OnPreSetup), and hook up to the game window once reXglue opened it
-// (OnPostSetup, UI thread).
+// (OnPostSetup, UI thread). game_root = the game's folder (default.xex, Data\): the screens'
+// parchment is read from its LVL000.KXE in the background (WORK_LOG 154).
 void Load();
-void Attach(rex::ui::Window* window);
+void Attach(rex::ui::Window* window, const std::filesystem::path& game_root);
 
 // XInputGetState (game thread) for `user`: `pad` = what reXglue read (connected = a controller is
 // there). Applies the controller layout, and for user 0 adds the keyboard and the mouse. Returns
@@ -75,9 +77,10 @@ bool KeyIsBound(int vk);
 void BuildOverlay(float window_w, float window_h, float game_x, float game_y, float game_w, float game_h,
                   bool window_focused);
 
-// plume, whenever it decodes a game texture (level 0, linear blocks as uploaded): the screens'
-// parchment is the game's own (the pause "Moves" scroll), taken from here the first time the game
-// draws it and kept in ui_cache\ for later sessions. Never shipped.
+// plume, whenever it decodes a game texture (level 0, linear blocks as uploaded): the button icons
+// are cut out of the game's font pages (title screen / main menu, WORK_LOG 154), and the parchment
+// is taken here too if the game files could not be read (the pause "Moves" scroll). Both are kept
+// in ui_cache\ for later sessions. Never shipped.
 void OnGameTexture(uint32_t width, uint32_t height, uint32_t xenos_format, uint32_t swizzle, const uint8_t* data,
                    uint32_t row_pitch, int menu_id);
 

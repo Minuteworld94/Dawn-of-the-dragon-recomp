@@ -63,8 +63,9 @@ anything in *Recomp Settings → Customize controls*:
   **Esc** always pauses (and goes back in menus), **Enter** always starts / confirms.
 - **Controller**: swap the buttons around (choosing a button that is in use swaps the two).
 
-The screens use the game's own parchment and button pictures, taken from your copy of the game the
-first time you open *Pause → Moves* (until then they show stand-ins).
+The screens use the game's own parchment and button pictures, taken from your copy of the game when
+it starts: the parchment from its data files, the button icons from its fonts (nothing from the game
+is shipped; they are kept in `bin\ui_cache`).
 
 ### Achievements
 
@@ -160,7 +161,7 @@ Windows 10/11 x64. Everything is portable (nothing is installed system-wide).
 
 | Path | What |
 |---|---|
-| `project/spyro_recomp/src` | Everything hand-written: renderer (`plume_renderer.cpp`, `plume_hooks.cpp`), runtime shader translation (`shader_translator.cpp`), Recomp Settings menu (`spyro_hooks.cpp`, `spyro_settings.cpp`), achievements overlay (`spyro_achievements.cpp`, `spyro_ui.cpp`, `spyro_sound.cpp`), keyboard / mouse / controller bindings (`spyro_controls.cpp`, `test_input.cpp`), texture decoding, debug tools |
+| `project/spyro_recomp/src` | Everything hand-written: renderer (`plume_renderer.cpp`, `plume_hooks.cpp`), runtime shader translation (`shader_translator.cpp`), Recomp Settings menu (`spyro_hooks.cpp`, `spyro_settings.cpp`), achievements overlay (`spyro_achievements.cpp`, `spyro_ui.cpp`, `spyro_sound.cpp`), keyboard / mouse / controller bindings (`spyro_controls.cpp`, `test_input.cpp`), reading the game's `.KXE` data files (`spyro_kxe.cpp`), texture decoding, debug tools |
 | `project/spyro_recomp/*.toml` | reXglue codegen manifest and function boundaries |
 | `project/launcher` | `SpyroRecomp.exe`: game picker, ISO unpacker (XDVDFS), version check |
 | `project/shader_recomp` | SpyroShaderRecomp, a fork of XenosRecomp adapted to this game |

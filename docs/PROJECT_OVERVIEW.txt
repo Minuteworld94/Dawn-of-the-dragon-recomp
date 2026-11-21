@@ -43,7 +43,10 @@ GAME DATA (Data\, 415 files, 6.67 GB; shader pack separate):
   .RWS = RenderWare Audio stream (audio middleware, so likely RenderWare libs present)
   Shader\xenon\shfct.bin (17.6 MB) = precompiled shader pack -> Xenos microcode source
     for our shader translator (unverified: need to inspect).
-  .KXE/.KCS formats unknown yet (KXE looks packed/compressed: not plain headers).
+  .KXE = Xbox 360 XCTD compressed title data (128 KB LZX blocks + unpacked-size table) - CRACKED
+    11-20 (WORK_LOG 154): game code src\spyro_kxe.cpp, tool TOOLS\kxe\kxe_unpack (output = game data,
+    never commit). Inside: archives with DDS textures (the Moves parchment is in LVL000.KXE).
+    .KCS still unknown.
 
 The game's PowerPC (Xenon) code in default.xex is translated ahead of time into
 C++ by the reXglue SDK, then compiled to a native Windows x64 program. The
@@ -243,10 +246,19 @@ See the bottom of READ_WHEN_YOU_LOSE_CONTEXT_WORK_LOG.txt for the latest entries
 paragraphs further down are history (oldest first); THIS block is the current state.
 
 === CURRENT STATE (updated 2026-11-20) ===
-LATEST RELEASE: Pre-alpha 2.4 "the achievements update", tag v0.2.4-prealpha, commit 5cf6e09 (WORK_LOG 149).
-  Before it: 2.3 "the MSAA update", v0.2.3-prealpha, commit 0d1b3d5 (WORK_LOG 140-141).
+LATEST RELEASE: Pre-alpha 2.5 "the (VERY experimental) keyboard and mouse update", tag v0.2.5-prealpha,
+  commit 5be1810 (WORK_LOG 153) - pushed + release page opened 11-20; the user attaches the zip and publishes
+  (check it with the GitHub API when they say so).
+  Before it: 2.4 "the achievements update", tag v0.2.4-prealpha, commit 5cf6e09 (WORK_LOG 149).
+  Before that: 2.3 "the MSAA update", v0.2.3-prealpha, commit 0d1b3d5 (WORK_LOG 140-141).
   Earlier: v0.1.0 (10-27), v0.2.0 (10-30), v0.2.1 "2-1" (11-08), v0.2.1-prealpha-hotfix (11-09).
   Told players: last update for a while (days to weeks). 2.4 PUBLISHED 11-18 (zip attached, verified).
+DONE (11-20, WORK_LOG 154): parchment + button icons no longer need Pause > Moves. Parchment = read at
+  startup from LVL000.KXE (we can unpack .KXE now: src\spyro_kxe.cpp, tool TOOLS\kxe\). Icons = characters
+  of the game's FONTS, cut out of the font pages the game packs at runtime (title + main menu pages hold
+  them all), recognised by their order (magenta cell markers). This also fixed the 2.5 bug "parchment
+  there, button icons not" (2.5 matched one font page by hash). Shipped as v0.2.5-prealpha-hotfix once
+  the user publishes it (WORK_LOG 155).
 USER ON THE NEW MOUSE CAMERA (11-20): "it's good. real good. it needs tuning and there are bugs" -> ship it as
   Pre-alpha 2.5 "the VERY experimental keyboard and mouse update" (v0.2.5-prealpha), with the achievements
   OFF switch added first (WORK_LOG 152: Delete = off with Yes/No / back on with "cheevos are back!", Insert =

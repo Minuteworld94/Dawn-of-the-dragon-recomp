@@ -20,11 +20,13 @@
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <windows.h>
 
 #include "spyro_achievements.h"
+#include "spyro_kxe.h"
 #include "spyro_settings.h"
 #include "spyro_ui.h"
 #define XXH_INLINE_ALL
@@ -489,10 +491,9 @@ uint32_t g_ks_held = 0;  // keyboard inputs as the game was told by keystrokes
 std::deque<std::pair<uint16_t, uint16_t>> g_ks_queue;
 
 // ---- pictures from the player's own game (never shipped) ------------------------------------------
-// The pause Moves screen's parchment scroll and the game's controller button icons, both decoded by
-// plume when that screen comes up (found with SPYRO_TEXLOG=07, WORK_LOG 150). Matched by size,
-// format and the hash of the decoded data, so only those two are taken; kept in ui_cache\ so later
-// sessions have them at once.
+// The pause Moves screen's parchment scroll (WORK_LOG 150): read from the game's files at startup
+// (LVL000.KXE, the main menu's data - WORK_LOG 154), or else taken when plume decodes it on that
+// screen (matched by size, format and the hash of the decoded data). Kept in ui_cache\.
 struct GameImage {
   GameImage(const char* f, const char* n, uint32_t w, uint32_t h, uint32_t fmt, uint64_t hs)
       : file(f), name(n), width(w), height(h), format(fmt), hash(hs) {}
@@ -508,38 +509,45 @@ struct GameImage {
   std::atomic<bool> captured{false};  // this session (or from the cache)
 };
 GameImage g_parchment("ui_cache/parchment.bin", "parchment", 1024, 1024, 20, 0x7C97AE1A987565AAull);
-GameImage g_icons("ui_cache/buttons.bin", "button icons", 512, 512, 6, 0xEDDEC1E013AFB92Aull);
+// Where the parchment is in the game's files: a DDS (DXT4, 1024x1024, 6 mips) inside LVL000.KXE's
+// unpacked data; level 0 = 1 MB of linear little-endian DXT blocks = what plume decodes (same hash).
+constexpr uint64_t kParchmentOffset = 0x7201FA;
+constexpr uint32_t kParchmentSwizzle = 0x688;
+void ReadParchmentFromFiles(std::filesystem::path game_root);  // background thread (below)
 
-// Where each pad input's icon sits in the game's 512x512 button atlas (pixels).
+// The button icons (WORK_LOG 154): they are characters of the game's FONTS. The game packs each
+// font's characters into 512x512 8888 pages at runtime - every character in a cell with a magenta
+// pixel at its top-left corner and a green border, in character order - so where an icon lands
+// depends on the font and its letter sizes (fixed positions only worked in one level: the bug the
+// user found). The fonts of the title screen / main menu already hold every icon, so the icons are
+// picked up there: cells are found by their markers, and the icons by their place in the order,
+// anchored on the coloured faces (A A B B X X Y Y) and on the run of eight D-pads:
+//   ... RS-left (a-12) RS (a-11) RS-right (a-10) RS  |> |> (a-8) <| <| (a-6) LS LS (a-4) RS RS
+//   A A (a) B B X X Y Y LT LT (a+8) RT RT (a+10) LB LB (a+12) RB RB (a+14) ...
+//   ... LS (d-1)  D-pad x8 (d .. d+7: up d+1, down d+3, left d+5, right d+7)  stick  RS (d+9) ...
+// Each icon is cropped out and placed in our own 512x512 sheet (g_icon_sheet), kept in
+// ui_cache\icons.bin.
 struct IconRect {
   uint16_t x, y, w, h;
 };
-const IconRect kIconRects[kNumIn] = {
-    {393, 189, 60, 52},   // A
-    {69, 250, 60, 53},    // B
-    {198, 251, 59, 52},   // X
-    {328, 250, 60, 53},   // Y
-    {161, 307, 114, 53},  // LB
-    {2, 368, 114, 53},    // RB
-    {457, 246, 50, 58},   // LT
-    {55, 307, 50, 58},    // RT
-    {369, 133, 58, 47},   // Start
-    {4, 195, 58, 45},     // Back
-    {13, 3, 48, 56},      // left stick click (LS)
-    {315, 64, 48, 57},    // right stick click (RS)
-    {152, 2, 70, 58},     // D-pad up
-    {304, 2, 70, 58},     // D-pad down
-    {3, 63, 70, 58},      // D-pad left
-    {155, 63, 70, 58},    // D-pad right
-    {139, 186, 49, 57},   // move: LS
-    {139, 186, 49, 57},
-    {139, 186, 49, 57},
-    {139, 186, 49, 57},
-    {315, 64, 48, 57},    // camera up / down: RS
-    {315, 64, 48, 57},
-    {76, 124, 58, 57},    // camera left: RS tilted left
-    {233, 124, 58, 57},   // camera right: RS tilted right
+struct IconSheet {
+  std::mutex mutex;
+  // Collected so far (render thread): each input's icon, RGBA.
+  bool have[kNumIn] = {};
+  std::vector<uint8_t> crop[kNumIn];
+  uint16_t cw[kNumIn] = {}, ch[kNumIn] = {};
+  // The finished sheet waiting for a ui texture, then the texture.
+  std::vector<uint8_t> pending;
+  IconRect pending_rects[kNumIn] = {};
+  uint32_t texture = 0;
+  IconRect rects[kNumIn] = {};
+  bool cache_tried = false;
+  std::atomic<bool> done{false};  // the sheet exists (this session or from the cache)
 };
+IconSheet g_icon_sheet;
+constexpr const char* kIconFile = "ui_cache/icons.bin";
+constexpr uint32_t kIconMagic = 0x4E434953;  // "SICN"
+constexpr int kSheet = 512;
 
 }  // namespace
 
@@ -583,7 +591,13 @@ void Load() {
               l.invert_y ? " inverted" : "", Identity(l) ? "default" : "remapped");
 }
 
-void Attach(rex::ui::Window* window) {
+void Attach(rex::ui::Window* window, const std::filesystem::path& game_root) {
+  // The screens' parchment, read from the game's files in the background (WORK_LOG 154).
+  static bool s_reading = false;
+  if (!s_reading && !game_root.empty()) {
+    s_reading = true;
+    std::thread(ReadParchmentFromFiles, game_root).detach();
+  }
   if (!window || g_window) return;
   g_window = window;
   g_hwnd = HWND(window->GetNativeWindowHandle());
@@ -859,6 +873,190 @@ void StoreImage(GameImage& img, uint32_t w, uint32_t h, std::vector<uint8_t>&& r
   REXLOG_INFO("[spyro/controls] {} {}x{} {}", img.name, w, h, from_cache ? "loaded from ui_cache" : "taken from the game");
 }
 
+// ---- the parchment from the game's files (WORK_LOG 154) -----------------------------------------
+// Background thread at startup: LVL000.KXE is the main menu's data (always there); only the blocks
+// holding the picture are unpacked (~1.3 MB). Checked against the same hash as the screen capture.
+void ReadParchmentFromFiles(std::filesystem::path game_root) {
+  std::error_code ec;
+  if (g_parchment.captured || std::filesystem::exists(g_parchment.file, ec)) return;  // have it
+  auto start = Clock::now();
+  std::filesystem::path file = game_root / "Data" / "LVL000" / "LVL000.KXE";
+  constexpr size_t kLevel0 = 1024 * 1024;  // 256 x 256 blocks of 16 bytes
+  std::vector<uint8_t> dds;
+  if (!kxe::Read(file, kParchmentOffset - 128, 128 + kLevel0, dds)) {
+    REXLOG_WARN("[spyro/controls] parchment: could not read {} (it comes from Pause > Moves instead)", file.string());
+    return;
+  }
+  auto le32 = [&](size_t at) { return uint32_t(dds[at]) | uint32_t(dds[at + 1]) << 8 | uint32_t(dds[at + 2]) << 16 | uint32_t(dds[at + 3]) << 24; };
+  uint64_t hash = XXH3_64bits(dds.data() + 128, kLevel0);
+  if (std::memcmp(dds.data(), "DDS ", 4) != 0 || le32(12) != 1024 || le32(16) != 1024 || hash != g_parchment.hash) {
+    REXLOG_WARN("[spyro/controls] parchment: not where expected in {} (hash {:016X}) - another game version?",
+                file.string(), hash);
+    return;
+  }
+  std::vector<uint8_t> rgba;
+  if (!ToRgba(1024, 1024, g_parchment.format, kParchmentSwizzle, dds.data() + 128, 4096, rgba)) return;
+  StoreImage(g_parchment, 1024, 1024, std::move(rgba), false);
+  REXLOG_INFO("[spyro/controls] parchment read from the game's files (LVL000.KXE) in {:.0f} ms",
+              std::chrono::duration<double, std::milli>(Clock::now() - start).count());
+}
+
+// ---- the button icons from the game's font pages (WORK_LOG 154) ---------------------------------
+struct Cell {
+  int x, y, w, h;      // the cell including its border (x, y = the magenta marker)
+  int bx, by, bw, bh;  // the character inside: bounding box of its visible pixels
+  int solid;           // pixels that are clearly part of it
+  float hue, sat, val; // their average colour (hue in degrees)
+};
+
+bool Magenta(const uint8_t* p) { return p[0] > 200 && p[1] < 60 && p[2] > 90 && p[2] < 170; }
+bool Green(const uint8_t* p) { return p[1] > 200 && p[0] < 60 && p[2] < 60; }
+
+std::vector<Cell> FindCells(const std::vector<uint8_t>& rgba, int w, int h) {
+  auto px = [&](int x, int y) { return rgba.data() + (size_t(y) * w + x) * 4; };
+  // Markers in reading order (the characters' order); the rows are the markers' y values.
+  std::vector<Cell> cells;
+  std::vector<int> rows;
+  for (int y = 0; y + 1 < h; ++y)
+    for (int x = 0; x + 1 < w; ++x)
+      if (Magenta(px(x, y)) && Green(px(x + 1, y)) && Green(px(x, y + 1))) {
+        cells.push_back({x, y});
+        if (rows.empty() || rows.back() != y) rows.push_back(y);
+      }
+  for (Cell& c : cells) {
+    int x1 = c.x + 1, y1 = c.y + 1;
+    while (x1 < w && Green(px(x1, c.y))) ++x1;
+    while (y1 < h && Green(px(c.x, y1))) ++y1;
+    auto next_row = std::upper_bound(rows.begin(), rows.end(), c.y);
+    if (next_row != rows.end()) y1 = std::min(y1, *next_row);
+    c.w = x1 - c.x;
+    c.h = y1 - c.y;
+    // The inside: from 1 past the marker to the next cell's border.
+    int minx = w, miny = h, maxx = -1, maxy = -1;
+    double r = 0, g = 0, b = 0;
+    c.solid = 0;
+    for (int y = c.y + 1; y < y1; ++y)
+      for (int x = c.x + 1; x < x1; ++x) {
+        const uint8_t* p = px(x, y);
+        if (p[3] < 24 || Green(p) || Magenta(p)) continue;
+        minx = std::min(minx, x), maxx = std::max(maxx, x), miny = std::min(miny, y), maxy = std::max(maxy, y);
+        if (p[3] > 200) ++c.solid, r += p[0], g += p[1], b += p[2];
+      }
+    c.bx = minx, c.by = miny, c.bw = maxx - minx + 1, c.bh = maxy - miny + 1;
+    if (maxx < 0) c.bw = c.bh = 0;
+    c.hue = c.sat = c.val = 0;
+    if (c.solid) {
+      float fr = float(r / c.solid / 255), fg = float(g / c.solid / 255), fb = float(b / c.solid / 255);
+      float mx = std::max({fr, fg, fb}), mn = std::min({fr, fg, fb}), d = mx - mn;
+      c.val = mx;
+      c.sat = mx > 0 ? d / mx : 0;
+      if (d > 0) {
+        float hh = mx == fr ? std::fmod((fg - fb) / d, 6.0f) : mx == fg ? (fb - fr) / d + 2 : (fr - fg) / d + 4;
+        c.hue = hh * 60 < 0 ? hh * 60 + 360 : hh * 60;
+      }
+    }
+  }
+  return cells;
+}
+
+bool Colour(const Cell& c, float lo, float hi) {  // a saturated face in that hue range (lo > hi: wraps)
+  if (c.solid < 400 || c.sat < 0.3f) return false;
+  return lo <= hi ? c.hue >= lo && c.hue <= hi : c.hue >= lo || c.hue <= hi;
+}
+bool Gray(const Cell& c) { return c.solid > 400 && c.sat < 0.15f; }
+bool Light(const Cell& c) { return Gray(c) && c.val > 0.7f; }
+// The D-pad: a big dark-gray picture (the sticks next to it are narrower and emptier).
+bool Dpad(const Cell& c) { return Gray(c) && c.val < 0.6f && c.w >= 72 && c.w <= 82 && c.solid > 2500; }
+
+void TakeIcon(int input, const std::vector<uint8_t>& rgba, int w, const Cell& c) {
+  if (g_icon_sheet.have[input] || c.bw <= 0 || c.bh <= 0) return;
+  std::vector<uint8_t> out(size_t(c.bw) * c.bh * 4);
+  for (int y = 0; y < c.bh; ++y)
+    std::memcpy(out.data() + size_t(y) * c.bw * 4, rgba.data() + ((size_t(c.by) + y) * w + c.bx) * 4, size_t(c.bw) * 4);
+  g_icon_sheet.crop[input] = std::move(out);
+  g_icon_sheet.cw[input] = uint16_t(c.bw);
+  g_icon_sheet.ch[input] = uint16_t(c.bh);
+  g_icon_sheet.have[input] = true;
+}
+
+// Our sheet from the collected icons -> ui_cache\icons.bin and a ui texture.
+void FinishSheet() {
+  std::vector<uint8_t> sheet(size_t(kSheet) * kSheet * 4, 0);
+  IconRect rects[kNumIn] = {};
+  int x = 0, y = 0, row_h = 0;
+  for (int i = 0; i < kNumIn; ++i) {
+    int iw = g_icon_sheet.cw[i], ih = g_icon_sheet.ch[i];
+    if (x + iw > kSheet) x = 0, y += row_h + 2, row_h = 0;
+    if (y + ih > kSheet) return;  // cannot happen with ~24 icons of ~70 px
+    for (int r = 0; r < ih; ++r)
+      std::memcpy(sheet.data() + ((size_t(y) + r) * kSheet + x) * 4, g_icon_sheet.crop[i].data() + size_t(r) * iw * 4,
+                  size_t(iw) * 4);
+    rects[i] = {uint16_t(x), uint16_t(y), uint16_t(iw), uint16_t(ih)};
+    x += iw + 2;
+    row_h = std::max(row_h, ih);
+  }
+  std::error_code ec;
+  std::filesystem::create_directories("ui_cache", ec);
+  if (std::ofstream f{kIconFile, std::ios::binary}) {
+    uint32_t hdr[3] = {kIconMagic, uint32_t(kSheet), uint32_t(kSheet)};
+    f.write(reinterpret_cast<const char*>(hdr), sizeof(hdr));
+    f.write(reinterpret_cast<const char*>(rects), sizeof(rects));
+    f.write(reinterpret_cast<const char*>(sheet.data()), std::streamsize(sheet.size()));
+  }
+  std::lock_guard<std::mutex> lock(g_icon_sheet.mutex);
+  g_icon_sheet.pending = std::move(sheet);
+  std::memcpy(g_icon_sheet.pending_rects, rects, sizeof(rects));
+  g_icon_sheet.done = true;
+  REXLOG_INFO("[spyro/controls] button icons: all found in the game's font pages (saved to {})", kIconFile);
+}
+
+// A decoded 512x512 8888 texture: if it is a font page, take the icons it holds.
+void ScanFontPage(const std::vector<uint8_t>& rgba, int w, int h, uint64_t hash, int menu_id) {
+  std::vector<Cell> c = FindCells(rgba, w, h);
+  if (c.size() < 10) return;  // not a font page
+  int n = int(c.size()), found_a = -1, found_d = -1;
+  for (int a = 0; a + 15 < n && found_a < 0; ++a) {
+    bool faces = Colour(c[a], 80, 150) && Colour(c[a + 1], 80, 150) && Colour(c[a + 2], 330, 20) &&
+                 Colour(c[a + 3], 330, 20) && Colour(c[a + 4], 190, 240) && Colour(c[a + 5], 190, 240) &&
+                 Colour(c[a + 6], 35, 70) && Colour(c[a + 7], 35, 70);
+    bool rest = Light(c[a + 8]) && Light(c[a + 10]) && Gray(c[a + 12]) && Gray(c[a + 14]) && c[a + 12].w > 100 &&
+                c[a + 14].w > 100;
+    if (!faces || !rest) continue;
+    found_a = a;
+    const std::pair<int, int> faces_group[] = {{kA, a},       {kB, a + 2},   {kX, a + 4},   {kY, a + 6},
+                                               {kLT, a + 8},  {kRT, a + 10}, {kLB, a + 12}, {kRB, a + 14}};
+    for (auto [input, at] : faces_group) TakeIcon(input, rgba, w, c[at]);
+    if (a >= 8 && Light(c[a - 8]) && Light(c[a - 6])) TakeIcon(kStart, rgba, w, c[a - 8]), TakeIcon(kBack, rgba, w, c[a - 6]);
+    if (a >= 4 && Gray(c[a - 4]))
+      for (int input : {kLUp, kLDown, kLLeft, kLRight}) TakeIcon(input, rgba, w, c[a - 4]);
+    if (a >= 12 && Gray(c[a - 12]) && Gray(c[a - 10])) TakeIcon(kRLeft, rgba, w, c[a - 12]), TakeIcon(kRRight, rgba, w, c[a - 10]);
+  }
+  for (int d = 1; d + 9 < n && found_d < 0; ++d) {
+    bool run = true;
+    for (int k = 0; k < 8 && run; ++k) run = Dpad(c[d + k]);
+    if (!run || Dpad(c[d - 1]) || Dpad(c[d + 8]) || !Gray(c[d - 1]) || !Gray(c[d + 9])) continue;
+    found_d = d;
+    const std::pair<int, int> dpad_group[] = {{kL3, d - 1},    {kDUp, d + 1}, {kDDown, d + 3}, {kDLeft, d + 5},
+                                              {kDRight, d + 7}, {kR3, d + 9},  {kRUp, d + 9},   {kRDown, d + 9}};
+    for (auto [input, at] : dpad_group) TakeIcon(input, rgba, w, c[at]);
+  }
+  if (found_a < 0 && found_d < 0) return;
+  REXLOG_INFO("[spyro/controls] font page {:016X} (menu {:02X}, {} characters): {}{}", hash, menu_id & 0xFF, n,
+              found_a >= 0 ? "faces group at " + std::to_string(found_a) : std::string("no faces group"),
+              found_d >= 0 ? ", D-pad group at " + std::to_string(found_d) : std::string(", no D-pad group"));
+  // Done when everything is there (the tilted camera sticks fall back to the plain one).
+  for (int i = 0; i < kNumIn; ++i)
+    if (!g_icon_sheet.have[i] && i != kRLeft && i != kRRight) return;
+  for (int input : {kRLeft, kRRight})
+    if (!g_icon_sheet.have[input]) {
+      g_icon_sheet.crop[input] = g_icon_sheet.crop[kR3];
+      g_icon_sheet.cw[input] = g_icon_sheet.cw[kR3];
+      g_icon_sheet.ch[input] = g_icon_sheet.ch[kR3];
+      g_icon_sheet.have[input] = true;
+    }
+  FinishSheet();
+}
+
 }  // namespace
 
 void OnGameTexture(uint32_t width, uint32_t height, uint32_t xenos_format, uint32_t swizzle, const uint8_t* data,
@@ -867,17 +1065,28 @@ void OnGameTexture(uint32_t width, uint32_t height, uint32_t xenos_format, uint3
   // SPYRO_TEXLOG=<hex menu id> also saves those decoded in that menu as BMP in texdump\.
   static const char* s_log = std::getenv("SPYRO_TEXLOG");
   GameImage* wanted = nullptr;
-  for (GameImage* img : {&g_parchment, &g_icons})
-    if (width == img->width && height == img->height && xenos_format == img->format && !img->captured) wanted = img;
-  if (!s_log && !wanted) return;
+  if (width == g_parchment.width && height == g_parchment.height && xenos_format == g_parchment.format &&
+      !g_parchment.captured)
+    wanted = &g_parchment;
+  // The game's font pages (512x512 8888) hold the button icons (WORK_LOG 154).
+  bool font_page = width == kSheet && height == kSheet && xenos_format == 6 && !g_icon_sheet.done;
+  if (!s_log && !wanted && !font_page) return;
   uint32_t rows = xenos_format >= 18 && xenos_format <= 20 ? (height + 3) / 4 : height;
   uint64_t hash = XXH3_64bits(data, size_t(row_pitch) * rows);
+  if (font_page) {
+    std::vector<uint8_t> rgba;
+    if (ToRgba(width, height, xenos_format, swizzle, data, row_pitch, rgba))
+      ScanFontPage(rgba, int(width), int(height), hash, menu_id);
+  }
   if (s_log && (width >= 128 || height >= 128)) {
     REXLOG_INFO("[spyro/controls] texlog {}x{} format {} swizzle {:03X} menu {:02X} hash {:016X}", width, height,
                 xenos_format, swizzle, menu_id & 0xFF, hash);
-    int want_menu = int(std::strtol(s_log, nullptr, 16));
+    // SPYRO_TEXLOG=atlas: every 8888 texture (the game's runtime UI atlases), whatever the menu.
+    bool atlases = std::strcmp(s_log, "atlas") == 0;
+    int want_menu = atlases ? -1 : int(std::strtol(s_log, nullptr, 16));
     std::vector<uint8_t> rgba;
-    if (want_menu > 0 && (menu_id & 0xFF) == want_menu && ToRgba(width, height, xenos_format, swizzle, data, row_pitch, rgba)) {
+    bool dump = atlases ? xenos_format == 6 : (want_menu > 0 && (menu_id & 0xFF) == want_menu);
+    if (dump && ToRgba(width, height, xenos_format, swizzle, data, row_pitch, rgba)) {
       std::error_code ec;
       std::filesystem::create_directories("texdump", ec);
       char name[96];
@@ -1360,8 +1569,8 @@ void Wash(float x, float y, float w, float h, float r) {
 
 // The game's own icon for a pad input, fitted into h (returns false without the icons).
 bool Icon(int input, float x, float y, float h, float& w_out, float max_w = 0) {
-  if (!g_icons.texture) return false;
-  const IconRect& r = kIconRects[input];
+  if (!g_icon_sheet.texture) return false;
+  const IconRect& r = g_icon_sheet.rects[input];
   float w = h * float(r.w) / float(r.h);
   if (max_w > 0 && w > max_w) {  // wide icons (the bumpers): smaller, centred on the same line
     float nh = h * max_w / w;
@@ -1369,8 +1578,8 @@ bool Icon(int input, float x, float y, float h, float& w_out, float max_w = 0) {
     h = nh;
     w = max_w;
   }
-  float s = 1.0f / 512.0f;
-  ui::Image(g_icons.texture, x, y, w, h, 0xFFFFFFFF, r.x * s, r.y * s, (r.x + r.w) * s, (r.y + r.h) * s);
+  float s = 1.0f / float(kSheet);
+  ui::Image(g_icon_sheet.texture, x, y, w, h, 0xFFFFFFFF, r.x * s, r.y * s, (r.x + r.w) * s, (r.y + r.h) * s);
   w_out = w;
   return true;
 }
@@ -1379,8 +1588,8 @@ bool Icon(int input, float x, float y, float h, float& w_out, float max_w = 0) {
 // without it a round coloured A/B/X/Y / a small dark plate with the name. Returns the column width.
 float Badge(int input, float x, float y, float h) {
   float column = h * 2.0f, iw = 0;
-  if (g_icons.texture) {
-    const IconRect& r = kIconRects[input];
+  if (g_icon_sheet.texture) {
+    const IconRect& r = g_icon_sheet.rects[input];
     iw = std::min(column, h * float(r.w) / float(r.h));
     float ih = iw * float(r.h) / float(r.w);
     Icon(input, x + (column - iw) * 0.5f, y + (h - ih) * 0.5f, ih, iw);
@@ -1417,7 +1626,7 @@ void SlotBox(float x, float y, float w, float h, const std::string& text, bool s
   uint32_t color = waiting ? kPurple : text.empty() ? kInkFaint : kInk;
   if (waiting) color = ui::Rgba(kPurple, 0.55f + 0.45f * float(std::sin(Now() * 6.0)));
   float iw = 0;
-  if (icon >= 0 && !waiting && g_icons.texture) {
+  if (icon >= 0 && !waiting && g_icon_sheet.texture) {
     float ih = h * 0.82f;
     Icon(icon, x + h * 0.25f, y + (h - ih) * 0.5f, ih, iw, h * 1.4f);
     iw += h * 0.2f;
@@ -1583,12 +1792,40 @@ void UpdateImage(GameImage& img) {
   img.pending.clear();
 }
 
+// The icon sheet: from ui_cache\icons.bin (render thread, once), and a new one -> a ui texture.
+void UpdateIconSheet() {
+  IconSheet& s = g_icon_sheet;
+  if (!s.cache_tried) {
+    s.cache_tried = true;
+    std::ifstream f(kIconFile, std::ios::binary);
+    uint32_t hdr[3] = {};
+    IconRect rects[kNumIn] = {};
+    std::vector<uint8_t> rgba(size_t(kSheet) * kSheet * 4);
+    if (f.read(reinterpret_cast<char*>(hdr), sizeof(hdr)) && hdr[0] == kIconMagic && hdr[1] == uint32_t(kSheet) &&
+        hdr[2] == uint32_t(kSheet) && f.read(reinterpret_cast<char*>(rects), sizeof(rects)) &&
+        f.read(reinterpret_cast<char*>(rgba.data()), std::streamsize(rgba.size()))) {
+      std::lock_guard<std::mutex> lock(s.mutex);
+      if (!s.done) {
+        s.pending = std::move(rgba);
+        std::memcpy(s.pending_rects, rects, sizeof(rects));
+        s.done = true;
+        REXLOG_INFO("[spyro/controls] button icons loaded from {}", kIconFile);
+      }
+    }
+  }
+  std::lock_guard<std::mutex> lock(s.mutex);
+  if (s.pending.empty()) return;
+  s.texture = ui::CreateTexture(kSheet, kSheet, ui::TextureFormat::kRgba8, s.pending.data());
+  std::memcpy(s.rects, s.pending_rects, sizeof(s.rects));
+  s.pending.clear();
+}
+
 }  // namespace
 
 void BuildOverlay(float window_w, float window_h, float game_x, float game_y, float game_w, float game_h,
                   bool window_focused) {
   UpdateImage(g_parchment);
-  UpdateImage(g_icons);
+  UpdateIconSheet();
   if (g_open_request.exchange(false) && g_screen == kClosed) {
     g_ui.chooser = 0;
     g_ui.prev_buttons = 0xFFFF;  // the A that opened it is still held

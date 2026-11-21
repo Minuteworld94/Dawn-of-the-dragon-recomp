@@ -1,6 +1,14 @@
-**Pre-alpha 2.5 - the (VERY experimental) keyboard and mouse update** of the Spyro: Dawn of the
-Dragon PC recomp. Bring your own copy of the game (Xbox 360, USA/Europe disc) as an `.iso` or
-extracted files.
+**Pre-alpha 2.5 hotfix** of the Spyro: Dawn of the Dragon PC recomp - the (VERY experimental)
+keyboard and mouse update, fixed. Bring your own copy of the game (Xbox 360, USA/Europe disc) as an
+`.iso` or extracted files.
+
+Fixed in this hotfix:
+- **Button icons in Customize controls**: they were missing for most players (they only appeared
+  after opening Pause -> Moves in one particular level). The icons are part of the game's fonts,
+  and are now taken from them as soon as the title screen and main menu come up
+- **The parchment** no longer needs a visit to Pause -> Moves either: it is read from your copy of
+  the game's data files when the game starts
+- Both are still taken from your own copy of the game - nothing from the game is shipped
 
 > **Very experimental.** Keyboard and mouse play is brand new. It works, but it still needs tuning
 > and has bugs. Please report what feels wrong, with the newest file from the `logs` folder.
@@ -21,8 +29,7 @@ New in pre-alpha 2.5 - **keyboard and mouse**:
   light / heavy attack, **Q E R F** triggers and bumpers, **arrows** D-pad (elements), **Tab** Back,
   **P** Start, **middle mouse** lock-on. **Esc** always pauses (and goes back in menus), **Enter**
   always starts / confirms
-- The parchment and button pictures come from your own copy of the game: open **Pause -> Moves**
-  once and they are kept from then on (stand-ins until then)
+- The parchment and button pictures come from your own copy of the game, taken when it starts
 
 Also new - **turn achievements off**:
 - **Delete** on the keyboard turns achievements off (it asks first). While they are off, nothing

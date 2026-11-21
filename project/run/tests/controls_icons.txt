@@ -1,0 +1,22 @@
+# Button icons (WORK_LOG 154), with -AutoBoot -SaveBase testuser_base: pause -> Options -> Recomp
+# Settings -> "Customize controls" -> Keyboard and mouse, scrolled to the bottom (movement, camera,
+# D-pad rows) -> back -> Controller screen. The icons come from the title / main menu font pages.
+# <seconds> <buttons> [hold]
+33       START   # pause (0x0F)
+@0F 1.5  DOWN    # Moves
+@0F 2.2  DOWN    # Armor
+@0F 2.9  DOWN    # Elements
+@0F 3.6  DOWN    # Options
+@0F 4.5  A       # pause Options (0x17)
+@17 1.5  DOWN    # Tutorial
+@17 3    LEFT    # Recomp Settings button
+@17 5    A       # Recomp Settings (0x22)
+@22 3    DOWN    # Customize controls
+@22 5    A       # chooser
+@22 7    A       # Keyboard and mouse
+@22 8    DOWN    1.6   # hold: repeats down the list
+@22 10   DOWN    1.6
+@22 12   DOWN    1.4
+@22 15   B       # back to the chooser
+@22 16   DOWN    # Controller
+@22 17   A

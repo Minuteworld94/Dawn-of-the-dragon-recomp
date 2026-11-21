@@ -35,8 +35,8 @@ KEYBOARD, MOUSE AND CONTROLLER
       Tab = Back, P = Start, middle mouse = lock-on.
       Esc always pauses (back in menus), Enter always starts / confirms.
     - Controller: swap its buttons around.
-  Saved in bin\controls.ini. The screens use the game's own parchment and button pictures once you
-  have opened Pause > Moves one time (taken from your copy of the game, kept in bin\ui_cache).
+  Saved in bin\controls.ini. The screens use the game's own parchment and button pictures, taken
+  from your copy of the game when it starts (kept in bin\ui_cache).
 
 ACHIEVEMENTS
   All 50 of the game's achievements, earned as you play; a popup shows each one you unlock

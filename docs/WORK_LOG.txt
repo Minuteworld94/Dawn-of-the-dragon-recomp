@@ -2648,3 +2648,60 @@ NEXT STEPS (in order):
      (base with achievements_off.txt): "achievements are OFF" at start, unlock 5 undone, Delete -> "cheevos are
      back!" pill (screenshot), flag file removed. Real Delete / Insert key presses not pressed by hand (same
      GetAsyncKeyState path the old Delete used).
+[153] 2026-11-20  RELEASE: Pre-alpha 2.5 "the (VERY experimental) keyboard and mouse update" (user: "it's good.
+     real good. it needs tuning and there are bugs but i wanna ship this as the VERY experimental keyboard and
+     mouse update", after adding WORK_LOG 152). Version v0.2.5-prealpha. ship_template: RELEASE_NOTES.md
+     rewritten (keyboard/mouse, mouse camera, Customize controls, achievements off / Insert reset; known
+     issues: very experimental, no wall avoidance for the mouse camera, player 1 always connected), README.txt
+     / README.md (achievements off + Insert, lock-on middle mouse, known issues). make-ship -Version
+     v0.2.5-prealpha: zip 35.3 MB (spyrodotd.exe 19:36 build; rexruntime/rexgpu-xenos 17:16, SDK unchanged -
+     patches identical to 2.4), repo 133 files; no game files, no personal data (grep). Pushed as commit
+     5be1810 on main (Minuteworld94 noreply, 28 files changed). Pre-filled releases/new link (tag
+     v0.2.5-prealpha, target main, prerelease, 6287 chars) in ship\RELEASE_LINK.txt, opened in the user's
+     browser + Explorer at the zip: the user attaches the zip and publishes. NOT YET CONFIRMED PUBLISHED.
+[154] 2026-11-20  BUTTON ICONS FIXED + BOTH PICTURES WITHOUT THE MOVES SCREEN; .KXE FILES CRACKED (user, playing
+     the 2.5 zip: "the parchments there but the button icons aren't. just fix this and ill push an updated
+     build. if you need to unpack the .kxe, do it. if you need tools to do it, put them in tools.").
+     CAUSE: the button icons are CHARACTERS OF THE GAME'S FONTS. The game packs each font's characters into
+     512x512 8888 pages (swizzle 60A) at runtime - each character in a cell with a MAGENTA pixel
+     (255,0,128) at its top-left and a 1-px GREEN border (0,255,0), in character order - so the page layout
+     depends on the font / its letter sizes. WORK_LOG 150 matched one page by hash (EDDEC1E013AFB92A, the
+     avalar Moves screen) with fixed rects -> in other levels (level 1: 64A186286B691F9F) nothing matched.
+     (user's bin\ui_cache had parchment.bin only.) Seen pages (SPYRO_TEXLOG=atlas, NEW: dumps every 8888
+     texture): menu 04 title D32049DDF22FCA21 (letters + LS + 8 D-pads + RS), menu 09 main menu
+     D3BB09AF38A9235F (fancy letters) + 27CAA2A16F0B4B3E (RS, |>, <|, LS, RS, A..RB, combos) - the same in
+     every save.
+     FIX (spyro_controls.cpp ScanFontPage, on every decoded 512x512 format-6 texture until done): cells by
+     their markers (rows = marker y values), per cell the visible bbox and the average colour of its solid
+     pixels; icons by their place in the order, anchored on the faces A A B B X X Y Y (hue green/red/blue/
+     yellow, then light LT/RT at a+8/a+10, wide LB/RB at a+12/a+14): Start a-8, Back a-6, move = LS a-4,
+     camera left/right = RS tilted a-12/a-10; and on the run of 8 D-pads (gray, 72-82 wide, >2500 solid px -
+     the sticks beside them are 73 wide but emptier): L3 = d-1, up/down/left/right = d+1/d+3/d+5/d+7, R3 and
+     camera up/down = d+9. Same choices as the old fixed rects. The crops go into OUR 512x512 sheet ->
+     ui_cache\icons.bin ("SICN", rect table + RGBA; old buttons.bin is ignored). Title page gives the D-pad
+     group, main menu page the faces group -> complete at the main menu, before any level.
+     .KXE = Xbox 360 XCTD (read the game's own reader sub_82414A50 / sub_82416CC8 with Ghidra): 16-byte BE
+     header (magic 0FF512ED, version 1, ?, flags: bits 4-5 block = 0x8000<<n (128 KB), bits 6-21 block
+     count, bits 22-23 != 0 -> 32-bit table entries else 20-bit); bit-packed table of each block's UNPACKED
+     size; block i = file bytes [i*128K, (i+1)*128K) (block 0 after the header): LZX frames (u16 BE size +
+     data, 32 KB unpacked each, the block's last shorter), zero padding. Each block is its own LZX stream ->
+     SDK lzx_decompress (libmspack, exported by rexruntime.dll; already used for the XEX). Odd-sized frames:
+     libmspack wants a pad byte when the frame ends with an odd uncompressed block, but not when the block
+     goes on into the next frame -> both are tried (all padded first). Still failing: LVL010 block 675 and
+     one STR01003 block (frame 0 itself fails - unknown; not needed). Unpacked data: archives with a GUID
+     (6CB6D7C0 8E9CA84C 8A0FF604 9AF851F0) and DDS files inside.
+     TOOL: TOOLS\kxe\ (kxe_unpack.cpp + build.ps1 + run.ps1 - links rexruntime.lib, runs with the game
+     build folder on PATH): kxe_unpack <file.kxe> [out.bin] [--blocks first count]. Output = game data:
+     scratchpad only, never commit. make-ship copies its source into the repo (gitignore allows TOOLS/kxe).
+     PARCHMENT: a DDS (DXT4, 1024x1024, 6 mips) in LVL000.KXE (main menu data) at unpacked 0x72017A, level 0
+     at 0x7201FA = linear little-endian DXT blocks = exactly what plume decodes (same XXH3 7C97AE1A987565AA);
+     also in LVL010.KXE at 0x7BADAA. NEW src\spyro_kxe.{h,cpp}: kxe::Read(file, offset, size) unpacks only
+     the blocks needed. controls::Attach(window, game_data_root()) starts a background thread: if no
+     parchment.bin yet, read 128+1 MB there, check "DDS ", 1024x1024 and the hash, ToRgba -> StoreImage.
+     The Moves-screen capture stays as the fallback. (The font icon page is NOT stored whole in the files -
+     00LLC000.KXE holds a page that only partly matches -> the fonts are packed at runtime.)
+     VERIFIED hands-off (level 1 save, empty ui_cache): "parchment read from the game's files (LVL000.KXE)
+     in 11 ms"; "font page D32049DD (menu 04): D-pad group at 89", "font page 27CAA2A1 (menu 09): faces
+     group at 13", "button icons: all found"; screenshots ico1/ico2: every keyboard and controller row has
+     the right icon (D-pad zoom: up/down/left/right light the right arm). Next session: "button icons
+     loaded from ui_cache/icons.bin". New test tests\controls_icons.txt.

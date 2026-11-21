@@ -78,6 +78,8 @@ foreach ($f in "fetch-binaries.ps1", "fetch-sources.ps1", "fix-symlinks.ps1", "p
     Copy-To "$tools\_scripts\$f" "$repo\TOOLS\_scripts\$f"
 }
 Copy-To "$template\apply-patches.ps1" "$repo\TOOLS\_scripts\apply-patches.ps1"
+# Our .KXE unpacker (research tool, WORK_LOG 154): source + build/run scripts, never its exe or output.
+foreach ($f in "kxe_unpack.cpp", "build.ps1", "run.ps1") { Copy-To "$tools\kxe\$f" "$repo\TOOLS\kxe\$f" }
 # Project sources.
 foreach ($f in "PLAY.bat", "CAMERA-TEST.bat", "TEST-ACHIEVEMENT-POPUP.bat", "run-game.ps1", "make-ship.ps1") { Copy-To "$project\$f" "$repo\project\$f" }
 Copy-Item "$template" "$repo\project\ship_template" -Recurse
