@@ -1,0 +1,14 @@
+# Achievements on / off (Delete key, WORK_LOG 152), with -AutoBoot -SaveBase testuser_avalar and env
+#   SPYRO_ACHTOGGLE=38,64,80   (as if Delete was pressed)
+#   SPYRO_ACHUNLOCK=5,50;14,70 (real unlocks through the SDK)
+#   SPYRO_ACHLIST=55           (list opens while off: "(turned off)")
+#   SPYRO_ACHRESET=90          (reset question, now the Insert key)
+# 38 off question (No picked) -> LEFT = Yes -> A: OFF + notice. 50 unlock 5 -> undone, no popup.
+# 55 list -> B closes. 64 Delete -> back on, "cheevos are back!". 70 unlock 14 -> popup.
+# 80 off question again -> A = No (stays on). 90 reset question -> B cancels.
+# <seconds> <buttons> [hold]
+42  LEFT
+44  A
+58  B
+84  A
+94  B

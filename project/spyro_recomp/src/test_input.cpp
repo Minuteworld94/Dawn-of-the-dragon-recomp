@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "spyro_achievements.h"
+#include "spyro_controls.h"
 #include "spyro_settings.h"
 #include "spyro_sound.h"
 
@@ -169,6 +170,47 @@ std::vector<Keystroke> BuildKeystrokes() {
 
 void MergeScript(PPCContext& ctx, uint8_t* base, uint32_t state);
 
+uint16_t Load16(const uint8_t* base, uint32_t a) {
+  uint16_t v;
+  std::memcpy(&v, base + a, 2);
+  return __builtin_bswap16(v);
+}
+
+// Customize controls (spyro_controls.cpp, WORK_LOG 150): the controller layout for every player,
+// and for controller 1 the keyboard and mouse - which also make controller 1 "connected" when no
+// pad is plugged in. A fresh packet number whenever the result changes, so the game notices.
+void ApplyControls(PPCContext& ctx, uint8_t* base, uint32_t user, uint32_t state) {
+  if (user > 3) return;
+  bool connected = ctx.r3.u32 == 0;
+  spyro::controls::Pad p;
+  if (connected) {
+    p.buttons = Load16(base, state + 4);
+    p.lt = base[state + 6];
+    p.rt = base[state + 7];
+    p.lx = int16_t(Load16(base, state + 8));
+    p.ly = int16_t(Load16(base, state + 10));
+    p.rx = int16_t(Load16(base, state + 12));
+    p.ry = int16_t(Load16(base, state + 14));
+  }
+  if (!spyro::controls::ProcessPad(user, p, connected)) return;
+  Store16(base, state + 4, p.buttons);
+  base[state + 6] = p.lt;
+  base[state + 7] = p.rt;
+  Store16(base, state + 8, uint16_t(p.lx));
+  Store16(base, state + 10, uint16_t(p.ly));
+  Store16(base, state + 12, uint16_t(p.rx));
+  Store16(base, state + 14, uint16_t(p.ry));
+  static spyro::controls::Pad s_last[4];
+  static uint32_t s_packet[4] = {0x20000000, 0x21000000, 0x22000000, 0x23000000};
+  if (!(p == s_last[user])) {
+    s_last[user] = p;
+    ++s_packet[user];
+  }
+  uint32_t packet = __builtin_bswap32(s_packet[user]);
+  std::memcpy(base + state, &packet, 4);
+  ctx.r3.u64 = 0;
+}
+
 // Auto boot (env SPYRO_AUTOBOOT; project\PLAY-CONTINUE.bat, test runs): straight from the logos
 // into the last save, by menu state instead of fixed times (boot times vary from run to run):
 // START until the main menu (the logos and the title have no menu of their own - state 0x24 "no
@@ -242,12 +284,13 @@ uint16_t AutoBootButtonsImpl() {
 
 extern "C" {
 
-// XInputGetCapabilities wrapper (user r3, flags r4, X_INPUT_CAPABILITIES* r5): with a script,
-// controller 1 is always a connected gamepad (type 1, subtype 1).
+// XInputGetCapabilities wrapper (user r3, flags r4, X_INPUT_CAPABILITIES* r5): controller 1 is
+// always a connected gamepad (type 1, subtype 1) - the keyboard plays as it when no pad is plugged
+// in (spyro_controls.cpp), and test scripts press for it.
 REX_FUNC(sub_82412B48) {
   uint32_t user = ctx.r3.u32, caps = ctx.r5.u32;
   __imp__sub_82412B48(ctx, base);
-  if ((!std::getenv("SPYRO_INPUTSCRIPT") && !AutoBoot()) || user != 0 || !caps || ctx.r3.u32 == 0) return;
+  if (user != 0 || !caps || ctx.r3.u32 == 0) return;
   std::memset(base + caps, 0, 20);
   base[caps] = 1;
   base[caps + 1] = 1;
@@ -258,13 +301,26 @@ REX_FUNC(sub_82412B48) {
 // else an error (ERROR_EMPTY when the queue is empty). X_INPUT_KEYSTROKE: u16 virtual key,
 // u16 unicode, u16 flags, u8 user, u8 hid code (big-endian).
 REX_FUNC(sub_82412C28) {
-  uint32_t keystroke = ctx.r5.u32;
+  uint32_t user = ctx.r3.u32, keystroke = ctx.r5.u32;
   __imp__sub_82412C28(ctx, base);
-  // A real key press ends the whoosh recording early, like a pad press (spyro_sound.cpp).
   if (keystroke && ctx.r3.u32 == 0) {
-    uint16_t flags;
-    std::memcpy(&flags, base + keystroke + 4, 2);
-    if (__builtin_bswap16(flags) & 1) spyro::sound::KeyPressed();
+    uint16_t vk = Load16(base, keystroke), flags = Load16(base, keystroke + 4);
+    // A real key press ends the whoosh recording early, like a pad press (spyro_sound.cpp).
+    if (flags & 1) spyro::sound::KeyPressed();
+    // The controller layout applies to its keystrokes too (spyro_controls.cpp).
+    if (spyro::controls::FilterKeystroke(vk, flags)) Store16(base, keystroke, vk);
+    else ctx.r3.u64 = 0x10D2;  // ERROR_EMPTY: dropped
+  }
+  // The keyboard's keystrokes (controller 1), when reXglue had none.
+  if (keystroke && ctx.r3.u32 != 0 && (user == 0 || user == 0xFF)) {
+    uint16_t vk = 0, flags = 0;
+    if (spyro::controls::NextKeystroke(vk, flags)) {
+      std::memset(base + keystroke, 0, 8);
+      Store16(base, keystroke, vk);
+      Store16(base, keystroke + 4, flags);
+      ctx.r3.u64 = 0;
+      return;
+    }
   }
   // Auto boot: the presses as keystroke events too (the title screen - and maybe others - read
   // only those): key down when a tap starts, key up when it ends.
@@ -308,18 +364,23 @@ REX_FUNC(sub_82412C28) {
 REX_FUNC(sub_82412B50) {
   uint32_t user = ctx.r3.u32, state = ctx.r4.u32;
   __imp__sub_82412B50(ctx, base);
-  if (user != 0 || !state) return;
-  MergeScript(ctx, base, state);
-  if (uint16_t auto_buttons = AutoBootButtons()) {
-    if (ctx.r3.u32 != 0) std::memset(base + state, 0, 16);  // no real pad: start from nothing
-    uint16_t buttons;
-    std::memcpy(&buttons, base + state + 4, 2);
-    Store16(base, state + 4, __builtin_bswap16(buttons) | auto_buttons);
-    static uint32_t s_packet = 0x40000000;  // a new packet number per tap, so the game notices
-    uint32_t packet = __builtin_bswap32(++s_packet);
-    std::memcpy(base + state, &packet, 4);
-    ctx.r3.u64 = 0;
+  if (!state) return;
+  if (user == 0) {
+    MergeScript(ctx, base, state);
+    if (uint16_t auto_buttons = AutoBootButtons()) {
+      if (ctx.r3.u32 != 0) std::memset(base + state, 0, 16);  // no real pad: start from nothing
+      uint16_t buttons;
+      std::memcpy(&buttons, base + state + 4, 2);
+      Store16(base, state + 4, __builtin_bswap16(buttons) | auto_buttons);
+      static uint32_t s_packet = 0x40000000;  // a new packet number per tap, so the game notices
+      uint32_t packet = __builtin_bswap32(++s_packet);
+      std::memcpy(base + state, &packet, 4);
+      ctx.r3.u64 = 0;
+    }
   }
+  // Script / auto-boot presses count as the real controller here.
+  ApplyControls(ctx, base, user, state);
+  if (user != 0) return;
   if (ctx.r3.u32 == 0) spyro::LockOnPad(base, state);
   if (ctx.r3.u32 == 0) {  // a press ends the whoosh recording early (spyro_sound.cpp, WORK_LOG 146)
     uint16_t b;
@@ -330,8 +391,9 @@ REX_FUNC(sub_82412B50) {
     spyro::sound::PadActivity(__builtin_bswap16(b), int16_t(__builtin_bswap16(uint16_t(x))),
                               int16_t(__builtin_bswap16(uint16_t(y))));
   }
-  // Achievements list open (WORK_LOG 144): the list gets the pad, the game a neutral one.
-  if (spyro::achievements::InputCaptured()) {
+  // Achievements list or the controls screens open (WORK_LOG 144, 150): the list gets the pad (the
+  // controls screens read the real controller themselves), the game a neutral one.
+  if (spyro::achievements::InputCaptured() || spyro::controls::InputCaptured()) {
     uint16_t buttons = 0;
     int16_t lx = 0, ly = 0;
     if (ctx.r3.u32 == 0) {

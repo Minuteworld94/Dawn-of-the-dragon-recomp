@@ -1,0 +1,29 @@
+# Customize controls rebinding (WORK_LOG 150), with -AutoBoot -SaveBase testuser_avalar and env
+# SPYRO_KEYSCRIPT=tests\controls_rebind_keys.txt (the keys, at plain times: Recomp Settings 0x22
+# comes up at ~42.6 s). Keyboard screen: Jump slot 1 -> J (taken off "Camera left"), slot 2 -> K
+# (taken off "Camera down"), X removes K again. Controller screen: Jump -> physical B (A and B swap).
+# Expected controls.ini: key_a=74,0  key_camera_left=0,0  key_camera_down=0,0  pad_a=1  pad_b=0.
+# <seconds> <buttons> [hold]
+33       START   # pause (0x0F)
+@0F 1.5  DOWN
+@0F 2.2  DOWN
+@0F 2.9  DOWN
+@0F 3.6  DOWN    # Options
+@0F 4.5  A       # pause Options (0x17)
+@17 1.5  DOWN    # Tutorial
+@17 3    LEFT    # Recomp Settings button
+@17 5    A       # Recomp Settings (0x22)
+@22 3    DOWN    # Customize controls
+@22 5    A       # chooser
+@22 8    A       # Keyboard and mouse (Jump, first key selected)
+@22 11   A       # waiting for a key -> J at ~55.5 s (key script)
+@22 15   RIGHT   # Jump, second key
+@22 16   A       # waiting -> K at ~60.5 s
+@22 20   X       # remove K again
+@22 23   B       # chooser
+@22 25   DOWN    # Controller
+@22 26   A       # controller screen (Jump selected)
+@22 29   A       # waiting for a button
+@22 31   B       # physical B -> Jump: A and B swap places
+@22 35   B       # chooser
+@22 37   B       # closed

@@ -17,6 +17,7 @@
 #include <ctime>
 #include <deque>
 #include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -25,6 +26,7 @@
 #include <windows.h>
 #endif
 
+#include "spyro_controls.h"
 #include "spyro_sound.h"
 #include "spyro_ui.h"
 
@@ -56,6 +58,7 @@ struct Entry {
 std::vector<Entry> g_entries;  // render thread
 uint32_t g_total_gamerscore = 0;
 bool g_loaded = false;
+std::atomic<bool> g_off{false};  // achievements turned off with Delete (WORK_LOG 152)
 
 std::string Clean(std::string s) {  // the game's strings carry stray CR / LF
   for (char& c : s)
@@ -315,6 +318,11 @@ void DrawList(float ww, float wh, float gx, float gy, float gw, float gh) {
   // Header: title and progress.
   float title = gh * 0.055f;
   ui::Text(ui::kBold, title, px + pad, py + pad * 0.8f, "Achievements", 0xFFFFFFFF);
+  if (g_off) {  // turned off with Delete (WORK_LOG 152)
+    float os = gh * 0.03f;
+    ui::Text(ui::kSemibold, os, px + pad + ui::TextWidth(ui::kBold, title, "Achievements") + gh * 0.02f,
+             py + pad * 0.8f + (title - os) * 0.6f, "(turned off)", 0xFFFF7A5A);
+  }
   uint32_t unlocked = 0, score = 0;
   for (const Entry& e : g_entries)
     if (e.unlocked) ++unlocked, score += e.gamerscore;
@@ -368,52 +376,133 @@ void DrawList(float ww, float wh, float gx, float gy, float gw, float gh) {
 
   // Footer.
   float fs = gh * 0.026f;
-  std::string hint = "Up / Down: scroll      LB / RB: page      Delete: reset all      B or 1: close";
+  std::string hint = std::string("Up / Down: scroll     LB / RB: page     ") +
+                     (g_off ? "Delete: turn back on" : "Delete: turn off") + "     Insert: reset all     B or 1: close";
   ui::Text(ui::kRegular, fs, px + (pw - ui::TextWidth(ui::kRegular, fs, hint)) * 0.5f, py + ph - footer + (footer - fs) * 0.35f,
            hint, 0xFFBFA890);
 }
 
-// ---- reset all (Delete key, WORK_LOG 148) -------------------------------------------------------
-// Delete in the game window asks first (Yes / No, No picked by default); Yes locks every
-// achievement again. The SDK has no reset call: SetUnlockSavePath (same file) forgets every unlock
-// in memory, SaveUnlockState then writes the file with none. A copy of the old file is kept next
-// to it as 565507F9.before_reset.toml (only the latest reset's).
-enum ResetState { kResetClosed = 0, kResetAsking = 1, kResetDone = 2 };
-std::atomic<int> g_reset{kResetClosed};
-std::atomic<int32_t> g_pad_lx{0};
-bool g_reset_yes = false;  // the picked button (No when it opens)
-double g_reset_done_at = 0;
-uint32_t g_reset_prev_buttons = 0;
-int g_reset_prev_dir = 0;
-bool g_reset_prev_left = false, g_reset_prev_right = false, g_reset_prev_enter = false, g_reset_prev_esc = false;
-bool g_prev_delete = false;
-std::atomic<bool> g_reset_request{false};  // test switch SPYRO_ACHRESET (game thread -> render thread)
+// ---- files -------------------------------------------------------------------------------------
+// <user>\achievements, as kernel_state.cpp builds it (Runtime::user_data_root()); empty = unknown.
+std::filesystem::path AchievementsDir() {
+  rex::system::KernelState* ks = rex::system::kernel_state();
+  if (!ks || !ks->emulator() || ks->emulator()->user_data_root().empty()) return {};
+  return ks->emulator()->user_data_root() / "achievements";
+}
 
-void OpenReset(const char* why) {
-  g_reset_yes = false;
+std::filesystem::path UnlockFile() {  // the SDK's unlock save, <title id>.toml
+  std::filesystem::path dir = AchievementsDir();
+  if (dir.empty()) return {};
+  char name[32];
+  std::snprintf(name, sizeof(name), "%08X.toml", rex::system::kernel_state()->title_id());
+  return dir / name;
+}
+
+std::filesystem::path OffFile() { return AchievementsDir().empty() ? std::filesystem::path() : AchievementsDir() / "achievements_off.txt"; }
+
+// ---- achievements off (Delete key, WORK_LOG 152) ----------------------------------------------------
+// While off, an unlock the game reports is undone at once. The SDK has no switch for it, but its
+// unlock callbacks run right after it saved the unlock and before the popup callbacks: ours writes
+// the save again without it (same format as AchievementManager::SaveUnlockState) and reads it back
+// (SetUnlockSavePath clears the unlocks in memory, LoadUnlockState loads the file). The popup
+// callback skips it. Remembered across sessions: <user>\achievements\achievements_off.txt (g_off).
+void SetOff(bool off, const char* why) {
+  g_off = off;
+  std::filesystem::path flag = OffFile();
+  std::error_code ec;
+  if (!flag.empty()) {
+    if (off) {
+      std::filesystem::create_directories(flag.parent_path(), ec);
+      std::ofstream file(flag, std::ios::binary);
+      file << "Achievements are turned off: nothing unlocks while this file is here.\n"
+              "Press Delete in the game to turn them back on (or delete this file).\n";
+    } else {
+      std::filesystem::remove(flag, ec);
+    }
+  }
+  REXLOG_INFO("[spyro/achievements] achievements turned {} ({})", off ? "OFF" : "back on", why);
+}
+
+void UndoUnlock(uint32_t id, const std::string& label) {  // game thread (the XGI message)
+  rex::system::KernelState* ks = rex::system::kernel_state();
+  std::filesystem::path path = UnlockFile();
+  if (!ks || path.empty()) {
+    REXLOG_WARN("[spyro/achievements] achievements are off, but {} could not be undone (no save path)", id);
+    return;
+  }
+  rex::system::AchievementManager& am = ks->achievements();
+  std::string content = "# Achievement unlock state - managed by ReXGlue runtime\n\n";
+  for (const auto& a : am.ListAchievements())
+    if (a.id != id && am.IsUnlocked(a.id))
+      content += "[unlocked." + std::to_string(a.id) + "]\nfiletime = " + std::to_string(am.GetUnlockTime(a.id)) + "\n\n";
+  std::filesystem::path temporary = path;
+  temporary += ".tmp";
+  {
+    std::ofstream file(temporary, std::ios::binary);
+    if (!file) {
+      REXLOG_WARN("[spyro/achievements] achievements are off, but {} could not be undone (cannot write)", id);
+      return;
+    }
+    file << content;
+  }
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+  std::filesystem::rename(temporary, path, ec);
+  am.SetUnlockSavePath(path);  // forgets every unlock in memory
+  am.LoadUnlockState();        // and reads the file back (all but this one)
+  REXLOG_INFO("[spyro/achievements] achievements are off: {} \"{}\" not unlocked (undone, {})", id, label,
+              am.IsUnlocked(id) ? "STILL UNLOCKED" : "ok");
+}
+
+// ---- questions and notices (Delete = off, Insert = reset all; WORK_LOG 148, 152) ----------------
+// Turning achievements off and resetting them ask first (Yes / No, No picked when it opens).
+// Turning them back on needs no question (Delete while off), only a notice.
+enum Question { kNoQuestion = 0, kAskReset = 1, kAskOff = 2 };
+std::atomic<int> g_question{kNoQuestion};
+std::atomic<int32_t> g_pad_lx{0};
+bool g_yes = false;  // the picked button (No when it opens)
+uint32_t g_q_prev_buttons = 0;
+int g_q_prev_dir = 0;
+bool g_q_prev_left = false, g_q_prev_right = false, g_q_prev_enter = false, g_q_prev_esc = false;
+bool g_prev_delete = false, g_prev_insert = false;
+std::atomic<bool> g_reset_request{false};   // test switch SPYRO_ACHRESET (game thread -> render thread)
+std::atomic<bool> g_toggle_request{false};  // test switch SPYRO_ACHTOGGLE
+
+// A short notice near the top of the picture that fades out (render thread).
+std::string g_notice;
+double g_notice_at = -100;
+constexpr double kNoticeSeconds = 2.6;
+
+void Notice(const char* text) {
+  g_notice = text;
+  g_notice_at = Now();
+}
+
+bool NoticeActive() { return !g_notice.empty() && Now() - g_notice_at < kNoticeSeconds; }
+
+void OpenQuestion(Question q, const char* why) {
+  g_yes = false;
   // Only presses from now on count (a button or key still held does nothing).
-  g_reset_prev_buttons = 0xFFFF;
-  g_reset_prev_dir = 0;
-  g_reset_prev_left = g_reset_prev_right = g_reset_prev_enter = g_reset_prev_esc = true;
+  g_q_prev_buttons = 0xFFFF;
+  g_q_prev_dir = 0;
+  g_q_prev_left = g_q_prev_right = g_q_prev_enter = g_q_prev_esc = true;
   RefreshUnlocks();
-  g_reset = kResetAsking;
-  REXLOG_INFO("[spyro/achievements] reset: asking ({})", why);
+  g_question = q;
+  REXLOG_INFO("[spyro/achievements] {}: asking ({})", q == kAskReset ? "reset" : "turn off", why);
 }
 
 void ResetAll() {
   rex::system::KernelState* ks = rex::system::kernel_state();
   if (!ks) return;
-  std::filesystem::path path;
-  if (ks->emulator() && !ks->emulator()->user_data_root().empty()) {
-    char name[32];
-    std::snprintf(name, sizeof(name), "%08X.toml", ks->title_id());
-    path = ks->emulator()->user_data_root() / "achievements" / name;
-    std::error_code ec;
-    if (std::filesystem::exists(path, ec)) {
-      std::filesystem::path backup = path;
-      backup.replace_extension(".before_reset.toml");
-      std::filesystem::copy_file(path, backup, std::filesystem::copy_options::overwrite_existing, ec);
-    }
+  // The SDK has no reset call: SetUnlockSavePath (same file) forgets every unlock in memory,
+  // SaveUnlockState then writes the file with none. A copy of the old file is kept next to it as
+  // 565507F9.before_reset.toml (only the latest reset's).
+  std::filesystem::path path = UnlockFile();
+  std::error_code ec;
+  if (!path.empty() && std::filesystem::exists(path, ec)) {
+    std::filesystem::path backup = path;
+    backup.replace_extension(".before_reset.toml");
+    std::filesystem::copy_file(path, backup, std::filesystem::copy_options::overwrite_existing, ec);
   }
   ks->achievements().SetUnlockSavePath(path);  // forgets every unlock (the file stays the same)
   ks->achievements().SaveUnlockState();         // and writes it with none
@@ -421,45 +510,51 @@ void ResetAll() {
   REXLOG_INFO("[spyro/achievements] reset: all achievements locked again ({})", path.string());
 }
 
-void CloseReset(bool done) {
-  g_reset = done ? kResetDone : kResetClosed;
-  g_reset_done_at = Now();
-  g_wait_release = true;  // the A / B that closed it must not reach the game
+void CloseQuestion() {
+  g_question = kNoQuestion;
+  g_wait_release = true;    // the A / B that closed it must not reach the game
   g_prev_buttons = 0xFFFF;  // nor close the list behind it while still held
   g_prev_esc = true;
 }
 
-void HandleResetInput(bool focused) {
+void HandleQuestionInput(bool focused) {
   uint32_t buttons = g_pad_buttons.load();
   int32_t lx = g_pad_lx.load();
-  uint32_t pressed = buttons & ~g_reset_prev_buttons;
-  g_reset_prev_buttons = buttons;
+  uint32_t pressed = buttons & ~g_q_prev_buttons;
+  g_q_prev_buttons = buttons;
   int dir = 0;
   if ((buttons & 0x0004) || lx < -16000) dir = -1;  // D-pad left / stick left
   if ((buttons & 0x0008) || lx > 16000) dir = 1;    // D-pad right / stick right
   bool left = focused && (GetAsyncKeyState(VK_LEFT) & 0x8000), right = focused && (GetAsyncKeyState(VK_RIGHT) & 0x8000);
   bool enter = focused && ((GetAsyncKeyState(VK_RETURN) & 0x8000) || (GetAsyncKeyState(VK_SPACE) & 0x8000));
   bool esc = focused && ((GetAsyncKeyState(VK_ESCAPE) & 0x8000) || (GetAsyncKeyState('N') & 0x8000));
-  if (dir != 0 && dir != g_reset_prev_dir) g_reset_yes = dir < 0;  // Yes is on the left
-  g_reset_prev_dir = dir;
-  if (left && !g_reset_prev_left) g_reset_yes = true;
-  if (right && !g_reset_prev_right) g_reset_yes = false;
-  bool confirm = (pressed & 0x1000) || (enter && !g_reset_prev_enter);                       // A / Enter
-  bool cancel = (pressed & 0x2000) || (pressed & 0x0020) || (esc && !g_reset_prev_esc);      // B / Back / Esc
-  g_reset_prev_left = left;
-  g_reset_prev_right = right;
-  g_reset_prev_enter = enter;
-  g_reset_prev_esc = esc;
-  if (cancel || (confirm && !g_reset_yes)) {
-    REXLOG_INFO("[spyro/achievements] reset: cancelled");
-    CloseReset(false);
+  if (dir != 0 && dir != g_q_prev_dir) g_yes = dir < 0;  // Yes is on the left
+  g_q_prev_dir = dir;
+  if (left && !g_q_prev_left) g_yes = true;
+  if (right && !g_q_prev_right) g_yes = false;
+  bool confirm = (pressed & 0x1000) || (enter && !g_q_prev_enter);                       // A / Enter
+  bool cancel = (pressed & 0x2000) || (pressed & 0x0020) || (esc && !g_q_prev_esc);      // B / Back / Esc
+  g_q_prev_left = left;
+  g_q_prev_right = right;
+  g_q_prev_enter = enter;
+  g_q_prev_esc = esc;
+  bool reset = g_question == kAskReset;
+  if (cancel || (confirm && !g_yes)) {
+    REXLOG_INFO("[spyro/achievements] {}: cancelled", reset ? "reset" : "turn off");
+    CloseQuestion();
   } else if (confirm) {
-    ResetAll();
-    CloseReset(true);
+    if (reset) {
+      ResetAll();
+      Notice("All achievements have been reset");
+    } else {
+      SetOff(true, "Yes picked");
+      Notice("Achievements are off - press Delete to turn them back on");
+    }
+    CloseQuestion();
   }
 }
 
-void DrawResetButton(float x, float y, float w, float h, const char* label, bool selected, float gh) {
+void DrawQuestionButton(float x, float y, float w, float h, const char* label, bool selected, float gh) {
   ui::RoundRect(x, y, w, h, h * 0.3f, selected ? 0xFFFF9A2E : 0x26FFFFFF);
   ui::RoundRectOutline(x, y, w, h, h * 0.3f, std::max(1.5f, gh * 0.0025f), selected ? 0xFFFFD39A : 0x60FFFFFF);
   float s = h * 0.52f;
@@ -467,48 +562,65 @@ void DrawResetButton(float x, float y, float w, float h, const char* label, bool
            selected ? 0xFF2A1208 : 0xFFE8D8C8);
 }
 
-void DrawReset(float ww, float wh, float gx, float gy, float gw, float gh) {
+void DrawNotice(float gx, float gy, float gw, float gh) {
+  if (!ui::FontsReady() || !NoticeActive()) return;
+  float t = float(Now() - g_notice_at);
+  float a = Smooth(t / 0.15f) * (1.0f - Smooth((t - float(kNoticeSeconds) + 0.6f) / 0.6f));
+  float s = gh * 0.034f, w = ui::TextWidth(ui::kSemibold, s, g_notice) + gh * 0.08f, h = gh * 0.075f;
+  float x = gx + (gw - w) * 0.5f, y = gy + gh * 0.08f;
+  ui::RoundRectGradient(x, y, w, h, h * 0.5f, ui::Rgba(0xF52A1208, a), ui::Rgba(0xF5100604, a));
+  ui::RoundRectOutline(x, y, w, h, h * 0.5f, std::max(1.5f, gh * 0.003f), ui::Rgba(0xFFFF9A2E, a));
+  ui::Text(ui::kSemibold, s, x + gh * 0.04f, y + (h - s) * 0.45f, g_notice, ui::Rgba(0xFFFFFFFF, a));
+}
+
+void DrawQuestion(float ww, float wh, float gx, float gy, float gw, float gh) {
   if (!ui::FontsReady()) return;
-  if (g_reset == kResetDone) {  // a short notice, fading out
-    float t = float(Now() - g_reset_done_at);
-    if (t > 2.6f) {
-      g_reset = kResetClosed;
-      return;
-    }
-    float a = 1.0f - Smooth((t - 2.0f) / 0.6f);
-    const char* msg = "All achievements have been reset";
-    float s = gh * 0.034f, w = ui::TextWidth(ui::kSemibold, s, msg) + gh * 0.08f, h = gh * 0.075f;
-    float x = gx + (gw - w) * 0.5f, y = gy + gh * 0.08f;
-    ui::RoundRectGradient(x, y, w, h, h * 0.5f, ui::Rgba(0xF52A1208, a), ui::Rgba(0xF5100604, a));
-    ui::RoundRectOutline(x, y, w, h, h * 0.5f, std::max(1.5f, gh * 0.003f), ui::Rgba(0xFFFF9A2E, a));
-    ui::Text(ui::kSemibold, s, x + gh * 0.04f, y + (h - s) * 0.45f, msg, ui::Rgba(0xFFFFFFFF, a));
-    return;
-  }
   ui::Rect(0, 0, ww, wh, 0xB4000000);
   float pw = gw * 0.50f, ph = gh * 0.40f, px = gx + (gw - pw) * 0.5f, py = gy + (gh - ph) * 0.5f;
   float pad = gh * 0.035f;
   ui::RoundRectGradient(px, py, pw, ph, gh * 0.025f, 0xFA2A1208, 0xFA100604);
   ui::RoundRectOutline(px, py, pw, ph, gh * 0.025f, std::max(1.5f, gh * 0.003f), 0xFFFF9A2E);
   float title = gh * 0.05f;
-  ui::Text(ui::kBold, title, px + pad, py + pad, "Reset all achievements?", 0xFFFFFFFF);
+  bool reset = g_question == kAskReset;
+  ui::Text(ui::kBold, title, px + pad, py + pad, reset ? "Reset all achievements?" : "Turn off achievements?",
+           0xFFFFFFFF);
   uint32_t unlocked = 0, score = 0;
   for (const Entry& e : g_entries)
     if (e.unlocked) ++unlocked, score += e.gamerscore;
-  std::string body = "This will lock all " + std::to_string(g_entries.size()) +
-                     " achievements again and erase their unlock dates (you have " + std::to_string(unlocked) +
-                     " unlocked, " + std::to_string(score) +
-                     " G). You will have to earn them again by playing. This can't be undone. Are you sure?";
+  std::string body;
+  if (reset) {
+    body = "This will lock all " + std::to_string(g_entries.size()) +
+           " achievements again and erase their unlock dates (you have " + std::to_string(unlocked) + " unlocked, " +
+           std::to_string(score) + " G). You will have to earn them again by playing. This can't be undone. Are you sure?";
+  } else {
+    body = "While they are off, nothing you do in the game unlocks an achievement and no popups appear. ";
+    if (unlocked == 1)
+      body += "The 1 you already have stays unlocked. ";
+    else if (unlocked > 1)
+      body += "The " + std::to_string(unlocked) + " you already have stay unlocked. ";
+    body += "Press Delete again any time to turn them back on.";
+  }
   float bs = gh * 0.03f;
   ui::TextWrapped(ui::kRegular, bs, px + pad, py + pad + title * 1.35f, pw - 2 * pad, bs * 0.25f, body, 0xFFE8D8C8);
   // Yes / No.
   float bw = pw * 0.26f, bh = gh * 0.065f, by = py + ph - pad - bh - gh * 0.04f, gap = pw * 0.06f;
   float bx = px + (pw - (2 * bw + gap)) * 0.5f;
-  DrawResetButton(bx, by, bw, bh, "Yes", g_reset_yes, gh);
-  DrawResetButton(bx + bw + gap, by, bw, bh, "No", !g_reset_yes, gh);
+  DrawQuestionButton(bx, by, bw, bh, "Yes", g_yes, gh);
+  DrawQuestionButton(bx + bw + gap, by, bw, bh, "No", !g_yes, gh);
   float fs = gh * 0.024f;
   std::string hint = "Left / Right: choose      A or Enter: confirm      B or Esc: cancel";
   ui::Text(ui::kRegular, fs, px + (pw - ui::TextWidth(ui::kRegular, fs, hint)) * 0.5f, py + ph - pad * 0.5f - fs, hint,
            0xFFBFA890);
+}
+
+std::deque<double> TimesFromEnv(const char* name) {  // "<s>[,<s>...]"
+  std::deque<double> times;
+  for (const char* p = std::getenv(name); p && *p;) {
+    times.push_back(std::atof(p));
+    p = std::strchr(p, ',');
+    if (p) ++p;
+  }
+  return times;
 }
 
 // Test switches: SPYRO_ACHTEST=<id>[,<seconds>[,<every seconds>]] shows that popup (no unlock),
@@ -525,7 +637,19 @@ void OnGameFrame() {
     rex::system::KernelState* ks = rex::system::kernel_state();
     if (ks) {
       s_registered = true;
+      // Achievements off (WORK_LOG 152): remembered from the last session.
+      std::error_code ec;
+      std::filesystem::path off_file = OffFile();
+      if (!off_file.empty() && std::filesystem::exists(off_file, ec)) {
+        g_off = true;
+        REXLOG_INFO("[spyro/achievements] achievements are OFF ({} - Delete turns them back on)", off_file.string());
+      }
+      // Unlock callbacks run before the popup callbacks: while off, the unlock is undone here.
+      ks->achievements().RegisterUnlockCallback([](const rex::system::AchievementEvent& ev) {
+        if (g_off) UndoUnlock(ev.achievement.id, ev.achievement.label);
+      });
       ks->achievements().RegisterNotificationCallback([](const rex::system::AchievementEvent& ev) {
+        if (g_off) return;  // undone just before (no popup)
         REXLOG_INFO("[spyro/achievements] unlocked {} \"{}\" ({} G)", ev.achievement.id, ev.achievement.label,
                     ev.achievement.gamerscore);
         Enqueue(ev.achievement.id);
@@ -550,45 +674,57 @@ void OnGameFrame() {
     g_test_list_at = -1;
     g_open = true;
   }
-  // SPYRO_ACHRESET=<seconds>[,<seconds>...]: the reset question opens then, as if Delete was pressed.
-  static std::deque<double> s_reset_at = [] {
-    std::deque<double> times;
-    for (const char* p = std::getenv("SPYRO_ACHRESET"); p && *p;) {
-      times.push_back(std::atof(p));
-      p = std::strchr(p, ',');
-      if (p) ++p;
-    }
-    return times;
-  }();
+  // SPYRO_ACHRESET=<seconds>[,<seconds>...]: the reset question opens then, as if Insert was pressed;
+  // SPYRO_ACHTOGGLE=<seconds>[,...]: as if Delete was pressed (off question / back on).
+  static std::deque<double> s_reset_at = TimesFromEnv("SPYRO_ACHRESET");
+  static std::deque<double> s_toggle_at = TimesFromEnv("SPYRO_ACHTOGGLE");
   if (!s_reset_at.empty() && now >= s_reset_at.front()) {
     REXLOG_INFO("[spyro/achievements] test switch: reset question at {:.1f} s (asked for {:.0f} s)", now,
                 s_reset_at.front());
     s_reset_at.pop_front();
     g_reset_request = true;
   }
-  // SPYRO_ACHUNLOCK=<id>[+<id>...],<seconds>: REAL unlocks through the SDK at that time - the same
-  // call the game's XGIUserWriteAchievements ends in (xgi_app.cpp -> KernelState::UnlockAchievement),
-  // so the whole popup path runs. Test runs only: they use the throwaway project\run\testuser.
-  static double s_unlock_at = -2;
-  static std::vector<uint32_t> s_unlock_ids;
-  if (s_unlock_at == -2) {
-    s_unlock_at = -1;
-    if (const char* v = std::getenv("SPYRO_ACHUNLOCK")) {
-      const char* p = v;
-      while (*p && *p != ',') {
-        s_unlock_ids.push_back(uint32_t(std::strtoul(p, const_cast<char**>(&p), 10)));
+  if (!s_toggle_at.empty() && now >= s_toggle_at.front()) {
+    REXLOG_INFO("[spyro/achievements] test switch: Delete at {:.1f} s (asked for {:.0f} s)", now, s_toggle_at.front());
+    s_toggle_at.pop_front();
+    g_toggle_request = true;
+  }
+  // SPYRO_ACHUNLOCK=<id>[+<id>...],<seconds>[;<id>...,<seconds>...]: REAL unlocks through the SDK at
+  // those times - the same call the game's XGIUserWriteAchievements ends in (xgi_app.cpp ->
+  // KernelState::UnlockAchievement), so the whole popup path runs. Test runs only: they use the
+  // throwaway project\run\testuser.
+  struct UnlockGroup {
+    double at;
+    std::vector<uint32_t> ids;
+  };
+  static std::deque<UnlockGroup> s_unlocks = [] {
+    std::deque<UnlockGroup> groups;
+    for (const char* p = std::getenv("SPYRO_ACHUNLOCK"); p && *p;) {
+      UnlockGroup g;
+      while (*p && *p != ',' && *p != ';') {
+        char* end = nullptr;
+        uint32_t id = uint32_t(std::strtoul(p, &end, 10));
+        if (end == p) break;  // not a number
+        g.ids.push_back(id);
+        p = end;
         if (*p == '+') ++p;
       }
-      s_unlock_at = *p == ',' ? std::atof(p + 1) : 30.0;
+      g.at = *p == ',' ? std::atof(p + 1) : 30.0;
+      groups.push_back(std::move(g));
+      p = std::strchr(p, ';');
+      if (p) ++p;
     }
-  }
-  if (s_unlock_at >= 0 && now >= s_unlock_at) {
-    s_unlock_at = -1;
+    return groups;
+  }();
+  if (!s_unlocks.empty() && now >= s_unlocks.front().at) {
+    UnlockGroup g = std::move(s_unlocks.front());
+    s_unlocks.pop_front();
     if (rex::system::KernelState* ks = rex::system::kernel_state())
-      for (uint32_t id : s_unlock_ids) {
+      for (uint32_t id : g.ids) {
         auto result = ks->achievements().UnlockAchievement(id, rex::system::AchievementNotification::kShow);
-        REXLOG_INFO("[spyro/achievements] test unlock {}: {}", id,
-                    result == rex::system::AchievementUnlockResult::kUnlocked ? "unlocked" : "not unlocked (already / unknown)");
+        REXLOG_INFO("[spyro/achievements] test unlock {}: {}{}", id,
+                    result == rex::system::AchievementUnlockResult::kUnlocked ? "unlocked" : "not unlocked (already / unknown)",
+                    ks->achievements().IsUnlocked(id) ? "" : " - not in the save now");
       }
   }
 }
@@ -605,13 +741,13 @@ void OpenList() {
 
 bool ListOpen() { return g_open; }
 
-bool InputCaptured() { return g_open || g_wait_release || g_reset == kResetAsking; }
+bool InputCaptured() { return g_open || g_wait_release || g_question != kNoQuestion; }
 
 void PadInput(uint16_t buttons, int16_t lx, int16_t ly) {
   g_pad_buttons = buttons;
   g_pad_lx = lx;
   g_pad_ly = ly;
-  if (!g_open && g_reset != kResetAsking && g_wait_release && buttons == 0 && ly > -8000 && ly < 8000 &&
+  if (!g_open && g_question == kNoQuestion && g_wait_release && buttons == 0 && ly > -8000 && ly < 8000 &&
       lx > -8000 && lx < 8000)
     g_wait_release = false;
 }
@@ -631,22 +767,43 @@ void SetFireFrames(const std::vector<std::vector<uint8_t>>& frames, uint32_t wid
 void BuildOverlay(float window_w, float window_h, float game_x, float game_y, float game_w, float game_h,
                   bool window_focused) {
   if (!g_loaded) LoadCatalog();
-  bool asking = g_reset == kResetAsking;
-  // 1 (top row or numpad) toggles the list (not while the reset question is up).
-  bool key1 = window_focused && ((GetAsyncKeyState('1') & 0x8000) || (GetAsyncKeyState(VK_NUMPAD1) & 0x8000));
+  bool asking = g_question != kNoQuestion;
+  // The hotkeys give way to the controls screens, and to keys the keyboard layout uses for playing
+  // (spyro_controls, WORK_LOG 150).
+  bool controls = spyro::controls::MenuOpen();
+  // 1 (top row or numpad) toggles the list (not while a question is up).
+  bool key1 = window_focused && !controls &&
+              (((GetAsyncKeyState('1') & 0x8000) && !spyro::controls::KeyIsBound('1')) ||
+               ((GetAsyncKeyState(VK_NUMPAD1) & 0x8000) && !spyro::controls::KeyIsBound(VK_NUMPAD1)));
   if (key1 && !g_prev_key1 && !asking) {
     g_open = !g_open;
     REXLOG_INFO("[spyro/achievements] list {}", g_open ? "opened (1 key)" : "closed (1 key)");
   }
   g_prev_key1 = key1;
-  // Delete asks whether to reset all achievements (WORK_LOG 148).
-  bool del = window_focused && (GetAsyncKeyState(VK_DELETE) & 0x8000);
-  bool requested = g_reset_request.exchange(false);
-  if (((del && !g_prev_delete) || requested) && !asking && g_loaded) {
-    OpenReset(requested ? "test switch" : "Delete key");
-    asking = true;
+  // Delete turns achievements off (asks first) or back on (WORK_LOG 152); Insert asks whether to
+  // reset them all (WORK_LOG 148).
+  bool del = window_focused && !controls && (GetAsyncKeyState(VK_DELETE) & 0x8000) &&
+             !spyro::controls::KeyIsBound(VK_DELETE);
+  bool ins = window_focused && !controls && (GetAsyncKeyState(VK_INSERT) & 0x8000) &&
+             !spyro::controls::KeyIsBound(VK_INSERT);
+  bool toggle_request = g_toggle_request.exchange(false), reset_request = g_reset_request.exchange(false);
+  if (!asking && g_loaded) {
+    if ((del && !g_prev_delete) || toggle_request) {
+      const char* why = toggle_request ? "test switch" : "Delete key";
+      if (g_off) {
+        SetOff(false, why);
+        Notice("cheevos are back!");
+      } else {
+        OpenQuestion(kAskOff, why);
+        asking = true;
+      }
+    } else if ((ins && !g_prev_insert) || reset_request) {
+      OpenQuestion(kAskReset, reset_request ? "test switch" : "Insert key");
+      asking = true;
+    }
   }
   g_prev_delete = del;
+  g_prev_insert = ins;
   bool open = g_open && g_loaded;
   bool popup;
   {
@@ -657,7 +814,7 @@ void BuildOverlay(float window_w, float window_h, float game_x, float game_y, fl
   static bool s_was_open = false;
   if (open && !s_was_open) RefreshUnlocks();  // each time the list opens
   s_was_open = open;
-  if (!open && !popup && g_reset == kResetClosed) return;
+  if (!open && !popup && !asking && !NoticeActive()) return;
   if (open) {
     if (!asking) HandleListInput(window_focused);  // the question takes the input while it is up
     if (g_open) DrawList(window_w, window_h, game_x, game_y, game_w, game_h);
@@ -666,10 +823,11 @@ void BuildOverlay(float window_w, float window_h, float game_x, float game_y, fl
     if (!g_loaded) LoadCatalog();
     DrawPopup(game_x, game_y, game_w, game_h);
   }
-  if (g_reset != kResetClosed) {
-    if (g_reset == kResetAsking) HandleResetInput(window_focused);
-    if (g_reset != kResetClosed) DrawReset(window_w, window_h, game_x, game_y, game_w, game_h);
+  if (asking) {
+    HandleQuestionInput(window_focused);
+    if (g_question != kNoQuestion) DrawQuestion(window_w, window_h, game_x, game_y, game_w, game_h);
   }
+  DrawNotice(game_x, game_y, game_w, game_h);
 }
 
 }  // namespace spyro::achievements

@@ -37,6 +37,7 @@
 #include "present_blit_ps.h"
 #include "present_blit_vs.h"
 #include "spyro_achievements.h"
+#include "spyro_controls.h"
 #include "spyro_ui.h"
 #include "ui_overlay_ps.h"
 #include "ui_overlay_vs.h"
@@ -1184,6 +1185,10 @@ uint32_t TextureDescriptor(const uint8_t* base, uint32_t dev, uint32_t s, uint32
       uint32_t row_pitch = 0;
       const uint8_t* src = base + (levels[l].in_mips ? mip_address : address);
       if (!xenos::DecodeLevel(src, info, fmt, levels[l], wb, hb, data, row_pitch)) return kNull2D;
+      // The controls screens' parchment is the game's own Moves scroll (WORK_LOG 150).
+      if (l == 0)
+        spyro::controls::OnGameTexture(info.width, info.height, info.format, info.swizzle, data.data(), row_pitch,
+                                       spyro::CurrentMenuId());
       // Debug (env SPYRO_PLUMEFOGDEBUG): replace the 256x16 DXT5 fog table with an opaque colour
       // code - block column 0 (u < 4/256) red, then green rising to full at u = 0.5, then blue
       // rising - so the screen shows where in the table each pixel samples (WORK_LOG 112).
@@ -2893,6 +2898,8 @@ void Present(uint8_t* base, uint32_t front_texture) {
     // before the window is drawn.
     bool focused = GetForegroundWindow() == HWND(g_window.load());
     spyro::achievements::BuildOverlay(float(w), float(h), (float(w) - vw) * 0.5f, (float(h) - vh) * 0.5f, vw, vh, focused);
+    // The controls screens (WORK_LOG 150), on top in the same overlay frame.
+    spyro::controls::BuildOverlay(float(w), float(h), (float(w) - vw) * 0.5f, (float(h) - vh) * 0.5f, vw, vh, focused);
     UploadUiTextures();
     g.list->barriers(RenderBarrierStage::GRAPHICS, RenderTextureBarrier(target, RenderTextureLayout::COLOR_WRITE));
     g.list->setFramebuffer(g.framebuffers[g.image].get());

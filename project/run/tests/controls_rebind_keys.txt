@@ -1,0 +1,3 @@
+# Keys for tests\controls_rebind.txt (env SPYRO_KEYSCRIPT): <seconds> <key> [hold]
+55.5  J
+60.5  K

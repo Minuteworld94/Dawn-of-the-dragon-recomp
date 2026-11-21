@@ -1,0 +1,9 @@
+# Keyboard from boot (WORK_LOG 150), env SPYRO_KEYSCRIPT, with -InputScript tests\menu_log_only.txt
+# (no auto boot): Enter = Start on the logos and the title (no menu there; the title only reacts
+# from ~14 s), then on the main menu (0x09) Down Arrow = D-pad down (New game -> Load game).
+# <seconds> <key> [hold]
+1.5   Enter
+4.5   Enter
+6.5   Enter
+14.5  Enter
+19    Down_Arrow

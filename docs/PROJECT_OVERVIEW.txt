@@ -1,4 +1,4 @@
-﻿=====================================================================
+=====================================================================
 READ WHEN YOU LOSE CONTEXT  -  PROJECT OVERVIEW
 The Legend of Spyro: Dawn of the Dragon (Xbox 360) - Native PC Recomp
 =====================================================================
@@ -242,23 +242,43 @@ Milestone 2 = title screen through our own renderer with no Xenia GPU code linke
 See the bottom of READ_WHEN_YOU_LOSE_CONTEXT_WORK_LOG.txt for the latest entries. The dated
 paragraphs further down are history (oldest first); THIS block is the current state.
 
-=== CURRENT STATE (updated 2026-11-18) ===
-LATEST RELEASE: Pre-alpha 2.3 "the MSAA update", tag v0.2.3-prealpha, commit 0d1b3d5 (WORK_LOG 140-141).
+=== CURRENT STATE (updated 2026-11-20) ===
+LATEST RELEASE: Pre-alpha 2.4 "the achievements update", tag v0.2.4-prealpha, commit 5cf6e09 (WORK_LOG 149).
+  Before it: 2.3 "the MSAA update", v0.2.3-prealpha, commit 0d1b3d5 (WORK_LOG 140-141).
   Earlier: v0.1.0 (10-27), v0.2.0 (10-30), v0.2.1 "2-1" (11-08), v0.2.1-prealpha-hotfix (11-09).
-  Told players: last update for a while (days to weeks).
+  Told players: last update for a while (days to weeks). 2.4 PUBLISHED 11-18 (zip attached, verified).
+USER ON THE NEW MOUSE CAMERA (11-20): "it's good. real good. it needs tuning and there are bugs" -> ship it as
+  Pre-alpha 2.5 "the VERY experimental keyboard and mouse update" (v0.2.5-prealpha), with the achievements
+  OFF switch added first (WORK_LOG 152: Delete = off with Yes/No / back on with "cheevos are back!", Insert =
+  reset all). Tuning + bug fixing of keyboard/mouse comes after (ask the user what feels off).
+CUSTOMIZE CONTROLS (11-20, WORK_LOG 150, built + tested hands-off; the user tested it - works):
+  Recomp Settings row 2 "Customize controls" -> chooser (Keyboard and mouse / Controller) -> binding
+  screens on the game's own Moves-screen parchment with the game's own button icons (both taken from the
+  player's game when the pause Moves screen is opened once, cached in ui_cache\; painted stand-ins until
+  then). Keyboard: 2 keys per pad input, mouse camera (sensitivity, invert), Esc/Enter fixed (pause/back,
+  start/confirm, meaning latched at key-down). Controller: swap list. Saved in controls.ini. Row labels
+  name each button's action (darkspyro.net Xbox 360 list, WORK_LOG 151). MOUSE CAMERA = a free camera
+  written over the game's view in spyro_lockon.cpp (1:1, stays put; right stick / lock-on take it back;
+  WORK_LOG 151) - the first version (mouse -> right stick) felt laggy to the user. Code:
+  src\spyro_controls.cpp (+ hooks in test_input.cpp, plume_renderer.cpp, spyro_hooks.cpp). Controller 1 is
+  now always "connected" (the keyboard). Test switch SPYRO_KEYSCRIPT (scripted keys / mouse speed).
+  Untested: real mouse feel, mouse clicks in the screens, wheel binds, no-controller play.
 NEXT MAJOR UPDATE (user's plan, 11-11): ACHIEVEMENTS, more bug fixes, more testing, lock-on camera
   refinement, stability, and the START of online co-op.
-ACHIEVEMENTS (11-18, WORK_LOG 143-146; NOT SHIPPED YET): unlocks = reXglue SDK's AchievementManager
+ACHIEVEMENTS (11-18, WORK_LOG 143-149; shipped in 2.4): unlocks = reXglue SDK's AchievementManager
   (catalog from the XEX, saved in <user>\achievements\565507F9.toml). Our overlay (src\spyro_ui,
   src\spyro_achievements, drawn by plume after the game picture): Xbox-360-style popup whose
   background is the main menu swoosh's FIRE (captured by plume on the Game Menu each session) and
   whose sound is the swoosh's fire WHOOSH (recorded from the game's own audio mix on the Game Menu,
   src\spyro_sound, played with PlaySound); list screen from the 1 key or the "Achievements" row at the
-  top of Recomp Settings (word only; A opens; B closes). Delete = reset all (Yes/No question, WORK_LOG 148).
+  top of Recomp Settings (word only; A opens; B closes). Delete = achievements off (Yes/No) / back on
+  (WORK_LOG 152, remembered in <user>\achievements\achievements_off.txt); Insert = reset all (Yes/No
+  question, WORK_LOG 148; was Delete until 152).
   Test: project\TEST-ACHIEVEMENT-POPUP.bat.
   Both need plume (Xenos renderer: ember gradient, no whoosh) and one pass through the Game Menu.
 GAME STATE: plume (own D3D12 renderer) is the default and draws everything; the game plays through
-  at least the first three levels. Recomp Settings rows (12): Achievements (button), Resolution,
+  at least the first three levels. Recomp Settings rows (13): Achievements (button), Customize controls
+  (button), Resolution,
   Renderer, Frame rate, VSync, Display mode, Motion blur, Anti-aliasing (Off/MSAA 2x/4x/8x, ini key
   "msaa", plume only), Bloom, Draw distance (Original/Max), Lock-on camera, Online co-op ("On - soon",
   not implemented).
@@ -277,6 +297,8 @@ WORKING RULES LEARNED THE HARD WAY:
     and when it is done (they press buttons otherwise - they said so, 11-18).
   - A REX_FUNC override in a file without the generated headers MUST be extern "C" (extern "C"
     REX_FUNC(sub_X)), or it silently does not replace the game function (WORK_LOG 146).
+  - Test scripts: menu-anchored lines (@0F ...) send pad state only, no keystrokes - screens that read
+    keystrokes (the pause Moves screen's B) need plain-time lines. @24 also fires on the title (0x24).
   - Hands-off tests: analysis\autotest-shots.ps1 -AutoBoot -SaveBase <snapshot> [-Set "key=v"]
     [-Camera "ex,ey,ez,lx,ly,lz"]. Snapshots in run\tests: testuser_base (level 1),
     testuser_level2_slot1 (level 2), testuser_avalar (level 3). Never the player's own saves.

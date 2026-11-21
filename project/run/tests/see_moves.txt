@@ -1,0 +1,12 @@
+# Controls research (customize controls, WORK_LOG 150): with -AutoBoot -SaveBase testuser_avalar
+# (in the level at ~25 s), pause (0x0F) -> "Moves" (first row under Single Player) and look
+# through it, to learn what each button does. (@24 is no anchor here: the title is 0x24 too.)
+# <seconds> <buttons> [hold]
+33       START   # pause
+@0F 1.5  DOWN    # Moves
+@0F 3    A       # open it
+@0F 7    DOWN
+@0F 11   DOWN
+@0F 15   RIGHT
+@0F 19   RIGHT
+@0F 23   LEFT

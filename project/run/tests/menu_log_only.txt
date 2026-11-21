@@ -1,0 +1,3 @@
+# No real presses: one far-future line so the script is active and logs each menu state the first
+# time it is seen ("menu state 0x.. first seen") - for runs driven by SPYRO_KEYSCRIPT keys.
+999  A

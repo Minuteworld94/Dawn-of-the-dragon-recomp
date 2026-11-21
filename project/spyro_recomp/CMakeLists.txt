@@ -27,6 +27,7 @@ set(SPYRODOTD_SOURCES
     src/spyro_ui.cpp
     src/spyro_achievements.cpp
     src/spyro_sound.cpp
+    src/spyro_controls.cpp
 )
 
 if(WIN32)

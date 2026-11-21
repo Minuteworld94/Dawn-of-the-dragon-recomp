@@ -1,4 +1,4 @@
-# Reset-all question (Delete key, WORK_LOG 148), with -AutoBoot and env SPYRO_ACHRESET=38,48:
+# Reset-all question (Insert key since WORK_LOG 152; was Delete in 148), with -AutoBoot and env SPYRO_ACHRESET=38,48:
 # the question opens at 38 s (No picked) -> A = No: nothing changes; opens again at 48 s ->
 # LEFT picks Yes -> A resets everything.
 # <seconds> <buttons> [hold]

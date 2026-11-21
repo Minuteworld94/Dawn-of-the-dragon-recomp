@@ -40,6 +40,9 @@ online_coop=0
 $($Set -join "`n")
 "@ | Set-Content "$PSScriptRoot\..\run\tests\test_settings.ini" -Encoding ascii
 $env:SPYRO_SETTINGS_FILE = "tests\test_settings.ini"
+# Controls too (Customize controls, WORK_LOG 150): their own file, back to the defaults each run.
+Remove-Item "$PSScriptRoot\..\run\tests\test_controls.ini" -ErrorAction SilentlyContinue
+$env:SPYRO_CONTROLS_FILE = "tests\test_controls.ini"
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Add-Type -AssemblyName System.Drawing
@@ -89,7 +92,7 @@ if (Test-Path "$root\project\run\testuser") { Remove-Item "$root\project\run\tes
 Copy-Item $base "$root\project\run\testuser" -Recurse
 $job = Start-Job -ScriptBlock { param($r, $n, $s) & "$r\project\run-game.ps1" -Seconds $s -Name $n -UserDir testuser } `
     -ArgumentList $root, $Name, (($Shots | Measure-Object -Maximum).Maximum + 8)
-Remove-Item Env:SPYRO_AUTOTEST, Env:SPYRO_INPUTSCRIPT, Env:SPYRO_SETTINGS_FILE, Env:SPYRO_AUTOBOOT -ErrorAction SilentlyContinue
+Remove-Item Env:SPYRO_AUTOTEST, Env:SPYRO_INPUTSCRIPT, Env:SPYRO_SETTINGS_FILE, Env:SPYRO_AUTOBOOT, Env:SPYRO_CONTROLS_FILE -ErrorAction SilentlyContinue
 if ($Camera) { Remove-Item Env:SPYRO_CAMPULL, Env:SPYRO_CAMFIX -ErrorAction SilentlyContinue }
 $start = Get-Date
 $events = @($Shots | % { [pscustomobject]@{ At = $_; Kind = 'shot' } })

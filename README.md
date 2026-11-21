@@ -33,6 +33,7 @@ PC settings live inside the game's own menus, under **Recomp Settings**:
 | Setting | Choices |
 |---|---|
 | Achievements | (a button) opens the achievements list |
+| Customize controls | (a button) keyboard and mouse bindings, mouse camera, controller button swaps |
 | Resolution | 720p, 1080p, 1440p, 4K |
 | Renderer | plume (default), Xenos, Xenos - Vulkan (takes effect on the next start) |
 | Frame rate | 30, 60, 120, Unlimited |
@@ -45,7 +46,25 @@ PC settings live inside the game's own menus, under **Recomp Settings**:
 | Lock-on camera | On, Off |
 | Online co-op | coming later |
 
-Settings are saved in `bin\recomp_settings.ini`, saves in `user`, logs in `logs`.
+Settings are saved in `bin\recomp_settings.ini` (controls in `bin\controls.ini`), saves in `user`,
+logs in `logs`.
+
+### Keyboard, mouse and controller
+
+The game plays with a keyboard and mouse as well as a controller (both at once is fine). Change
+anything in *Recomp Settings → Customize controls*:
+
+- **Keyboard and mouse**: up to two keys (or mouse buttons / the wheel) for every controller button
+  and stick direction (each row says what the button does in the game); the mouse turns the camera
+  directly during gameplay, like a PC game, and it stays where you leave it (sensitivity and invert
+  options; the controller's right stick gives the camera back to the game).
+  Default: WASD move, mouse camera (or I J K L), Space jump, left / right mouse fast / strong attack,
+  Q E R F triggers and bumpers, arrows D-pad, Tab Back, P Start, middle mouse lock-on.
+  **Esc** always pauses (and goes back in menus), **Enter** always starts / confirms.
+- **Controller**: swap the buttons around (choosing a button that is in use swaps the two).
+
+The screens use the game's own parchment and button pictures, taken from your copy of the game the
+first time you open *Pause → Moves* (until then they show stand-ins).
 
 ### Achievements
 
@@ -57,14 +76,17 @@ it did on the Xbox 360, and they are saved in `user\achievements`.
   from the game is shipped). Several unlocks at once show one after another.
 - **List**: press **1** on the keyboard, or *Recomp Settings → Achievements*. Up / Down scrolls,
   LB / RB pages, B or 1 closes.
-- **Reset**: press **Delete** and pick *Yes* (No is picked when the question opens). The old state
+- **Turn off**: press **Delete** and pick *Yes*. While achievements are off, nothing unlocks and no
+  popups appear (the ones you already have stay). Press **Delete** again to turn them back on.
+  Remembered between sessions (`user\achievements\achievements_off.txt` while off).
+- **Reset**: press **Insert** and pick *Yes* (No is picked when the question opens). The old state
   is kept as `user\achievements\565507F9.before_reset.toml`.
 
 The popup and the list are drawn by the plume renderer.
 
 ### Extras
 
-- **Lock-on camera**: click the right stick (R3) near enemies to lock the camera onto the nearest
+- **Lock-on camera**: click the right stick (R3, middle mouse on the keyboard) near enemies to lock the camera onto the nearest
   one (a white dot marks it); click again to let go. Turn it off in Recomp Settings to give R3
   back to the game.
 - **Quit to Desktop**: a plank at the bottom of the Game Menu and the Pause screen - press DOWN
@@ -79,6 +101,10 @@ each, on background threads) and kept in `bin\shader_cache`, so it is only done 
 
 ### Known issues
 
+- Keyboard and mouse play is very experimental: it still needs tuning and has bugs. The mouse
+  camera does not steer around walls by itself.
+- With the keyboard, player 1 always counts as connected (the game no longer notices a controller
+  being unplugged).
 - Gameplay has been tested through the first three levels; later areas may still have rendering bugs.
 - Online co-op is not implemented yet.
 - Draw distance Max costs some speed in big open views (it draws far more), and needs the plume
@@ -134,7 +160,7 @@ Windows 10/11 x64. Everything is portable (nothing is installed system-wide).
 
 | Path | What |
 |---|---|
-| `project/spyro_recomp/src` | Everything hand-written: renderer (`plume_renderer.cpp`, `plume_hooks.cpp`), runtime shader translation (`shader_translator.cpp`), Recomp Settings menu (`spyro_hooks.cpp`, `spyro_settings.cpp`), achievements overlay (`spyro_achievements.cpp`, `spyro_ui.cpp`, `spyro_sound.cpp`), texture decoding, debug tools |
+| `project/spyro_recomp/src` | Everything hand-written: renderer (`plume_renderer.cpp`, `plume_hooks.cpp`), runtime shader translation (`shader_translator.cpp`), Recomp Settings menu (`spyro_hooks.cpp`, `spyro_settings.cpp`), achievements overlay (`spyro_achievements.cpp`, `spyro_ui.cpp`, `spyro_sound.cpp`), keyboard / mouse / controller bindings (`spyro_controls.cpp`, `test_input.cpp`), texture decoding, debug tools |
 | `project/spyro_recomp/*.toml` | reXglue codegen manifest and function boundaries |
 | `project/launcher` | `SpyroRecomp.exe`: game picker, ISO unpacker (XDVDFS), version check |
 | `project/shader_recomp` | SpyroShaderRecomp, a fork of XenosRecomp adapted to this game |

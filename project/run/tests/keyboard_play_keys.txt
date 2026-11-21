@@ -1,0 +1,9 @@
+# Keyboard play (WORK_LOG 150), env SPYRO_KEYSCRIPT, with -AutoBoot -SaveBase testuser_avalar
+# -InputScript tests\none.txt (in the level at ~31 s): W runs forward, Space jumps, the mouse turns
+# the camera, Esc pauses (Start, no menu) and Esc in the pause menu goes back (B).
+# <seconds> <key> [hold]   |   <seconds> MOUSE <x px/s> <y px/s> [hold]
+34    W      2.5
+37.6  Space
+39    MOUSE  1800 0  1.2
+43    Esc
+47    Esc

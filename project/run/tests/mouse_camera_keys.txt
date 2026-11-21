@@ -1,0 +1,11 @@
+# Mouse camera (WORK_LOG 151), env SPYRO_KEYSCRIPT, with -AutoBoot -SaveBase testuser_avalar
+# -InputScript tests\menu_log_only.txt (in the level at ~31 s). Sensitivity 5 = 0.0019 rad per count:
+# 1500 counts/s for 0.6 s = 1.71 rad (98 degrees) to the right; then 600/s for 0.5 s down (0.57 rad);
+# then W: Spyro must run INTO the picture (away from the camera); Esc / Esc: pause and back - the
+# view must stay where the mouse put it.
+# <seconds> <key> [hold]   |   <seconds> MOUSE <x px/s> <y px/s> [hold]
+36    MOUSE  1500 0    0.6
+40    MOUSE  0    600  0.5
+43    W      2
+47    Esc
+49    Esc

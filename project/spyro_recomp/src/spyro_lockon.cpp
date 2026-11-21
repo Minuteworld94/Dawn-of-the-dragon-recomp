@@ -35,6 +35,7 @@
 #endif
 
 #include "guest_memory.h"
+#include "spyro_controls.h"
 #include "spyro_settings.h"
 
 extern "C" {
@@ -343,10 +344,97 @@ constexpr float kMarkerHeight = 1.0f;  // above the enemy's feet
 // above, toward the left of the picture) - found from where the dot landed on screenshots.
 constexpr float kMarkerSignX = -1.0f;
 
+constexpr uint32_t kRight = 0x574, kUp = 0x580, kFwd = 0x58C, kEye = 0x598, kLook = 0x5A4;
+
+// Writes a view over the game's camera result: the final eye / look-at / axes (+0x574..+0x5AF),
+// their copies (+0x5DC..), and the camera scene node's matrix (as the end of sub_8215AF68 does).
+void WriteView(uint8_t* base, uint32_t cam, const Vec3& r, const Vec3& u, const Vec3& f, const Vec3& new_eye,
+               const Vec3& new_look) {
+  StoreVec(base, cam + kRight, r);
+  StoreVec(base, cam + kUp, u);
+  StoreVec(base, cam + kFwd, f);
+  StoreVec(base, cam + kEye, new_eye);
+  StoreVec(base, cam + kLook, new_look);
+  StoreVec(base, cam + 0x5DC, u);  // copies the game reads back from the node (sub_8215C1A0)
+  StoreVec(base, cam + 0x5E8, f);
+  StoreVec(base, cam + 0x5F4, new_eye);
+  // The camera scene node: [cam+0x10]+4 = node data; its matrix rows at +0x10 (right, up,
+  // forward, position; the w word of each row holds flags), dirty bits as the game sets them.
+  uint32_t node = Load32(base, cam + 0x10);
+  if (node < 0x1000) return;
+  uint32_t data = Load32(base, node + 4);
+  if (data < 0x1000) return;
+  uint32_t m = data + 0x10;
+  StoreVec(base, m + 0x00, r);
+  StoreVec(base, m + 0x10, u);
+  StoreVec(base, m + 0x20, f);
+  StoreVec(base, m + 0x30, new_eye);
+  uint32_t flags = Load32(base, m + 0x0C) & ~0x00020003u;
+  flags = __builtin_bswap32(flags);
+  std::memcpy(base + m + 0x0C, &flags, 4);
+  uint32_t parent = Load32(base, data + 0xA0);
+  if (parent >= 0x1000) base[parent + 3] |= 3;
+  base[data + 3] |= 12;
+}
+
+// Camera axes for a view from eye to look (Y up; the "right" row points to screen left, as the
+// game's does).
+void Axes(const Vec3& eye, const Vec3& look, Vec3& r, Vec3& u, Vec3& f) {
+  f = Normalize({look.x - eye.x, look.y - eye.y, look.z - eye.z});
+  r = Normalize({f.z, 0, -f.x});
+  u = {f.y * r.z - f.z * r.y, f.z * r.x - f.x * r.z, f.x * r.y - f.y * r.x};
+}
+
+// ---- mouse camera (WORK_LOG 151) ------------------------------------------------------------------
+// A PC-style free camera for the mouse: the view orbits the hero at our own yaw / pitch, turned 1:1
+// by the mouse (spyro::controls::TakeMouseLook) and staying where it was put; the distance and the
+// height of the point it looks at stay the game's (so its zoom in tight places still applies). It
+// starts the first time the mouse moves in gameplay and gives the view back to the game camera
+// (eased) when the controller's right stick is used or the lock-on takes over. Spyro's controls
+// follow the view: the left stick is turned like for the lock-on (g_stick_turn, LockOnPad).
+constexpr float kFreeMinPitch = -0.30f, kFreeMaxPitch = 1.20f;  // eye height angle over the hero (rad)
+struct FreeLook {
+  bool on = false;
+  float yaw = 0, pitch = 0;  // direction pivot -> eye (yaw as atan2(x, z)), elevation
+  float weight = 0;          // 0 = the game's view, 1 = ours (eased)
+  float dist = -1;           // smoothed distance
+} g_free;
+
+// The point the free camera orbits: above the hero, at the height of the game's look-at point.
+Vec3 FreePivot(const Vec3& hero, const Vec3& look) { return {hero.x, look.y, hero.z}; }
+
+void AnglesOf(const Vec3& from, const Vec3& to, float& yaw, float& pitch, float& dist) {
+  Vec3 v{to.x - from.x, to.y - from.y, to.z - from.z};
+  dist = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+  yaw = std::atan2(v.x, v.z);
+  pitch = dist > 1e-4f ? std::asin(std::clamp(v.y / dist, -1.0f, 1.0f)) : 0.0f;
+}
+
+void ApplyFreeLook(uint8_t* base, uint32_t cam, const Vec3& hero, const Vec3& eye, const Vec3& look, float dt) {
+  float w = g_free.weight * g_free.weight * (3 - 2 * g_free.weight);  // smoothstep
+  // The game's view as angles around its look-at point, so weight 0 is exactly the game's view.
+  float gyaw, gpitch, gdist;
+  AnglesOf(look, eye, gyaw, gpitch, gdist);
+  gdist = std::max(gdist, 1.0f);
+  if (g_free.dist < 0) g_free.dist = gdist;
+  g_free.dist += (gdist - g_free.dist) * std::min(1.0f, dt * 6.0f);  // the game's zoom, without its jitter
+  float yaw = gyaw + WrapAngle(g_free.yaw - gyaw) * w;
+  float pitch = gpitch + (g_free.pitch - gpitch) * w;
+  float dist = gdist + (g_free.dist - gdist) * w;
+  Vec3 pv = FreePivot(hero, look);
+  Vec3 c{look.x + (pv.x - look.x) * w, look.y, look.z + (pv.z - look.z) * w};
+  float cp = std::cos(pitch);
+  Vec3 new_eye{c.x + dist * cp * std::sin(yaw), c.y + dist * std::sin(pitch), c.z + dist * cp * std::cos(yaw)};
+  Vec3 r, u, f;
+  Axes(new_eye, c, r, u, f);
+  g_stick_turn = WrapAngle(std::atan2(f.x, f.z) - std::atan2(look.x - eye.x, look.z - eye.z));
+  g_marker_on = false;
+  WriteView(base, cam, r, u, f, new_eye, c);
+}
+
 // After the game's camera update: while locked (and while easing out) swing the camera around
-// the hero so it looks past the hero at the target. The game's own camera is left alone - this
-// rewrites only what it hands on: the final eye / look-at / axes (+0x574..+0x5AF), their copies
-// (+0x5DC..), and the camera scene node's matrix (as the end of sub_8215AF68 does).
+// the hero so it looks past the hero at the target; otherwise the mouse camera, when in use. The
+// game's own camera is left alone - this rewrites only what it hands on (WriteView).
 void OverrideCamera(uint8_t* base, uint32_t cam) {
   static float s_yaw = 0, s_weight = 0;
   static auto s_last = std::chrono::steady_clock::now();
@@ -364,19 +452,68 @@ void OverrideCamera(uint8_t* base, uint32_t cam) {
       locked = (vt == kEnemyVtable || vt == kGolemVtable) && Sane(target);
     }
   }
+  Vec3 hero = LoadVec(base, cam + kCamFollow), eye = LoadVec(base, cam + kEye), look = LoadVec(base, cam + kLook);
+  bool sane = Sane(hero) && Sane(eye) && Sane(look);
+
+  // Mouse camera.
+  float mouse_yaw = 0, mouse_pitch = 0;
+  bool mouse = spyro::controls::TakeMouseLook(mouse_yaw, mouse_pitch);
+  bool enabled = spyro::controls::MouseCameraEnabled();
+  if (g_free.on && (locked || spyro::controls::PadCameraActive() || !sane || !enabled)) {
+    REXLOG_INFO("[spyro/mousecam] off ({})", locked     ? "lock-on"
+                                             : !sane    ? "no camera"
+                                             : !enabled ? "turned off"
+                                                        : "controller camera");
+    g_free.on = false;
+  }
+  static bool s_was_locked = false;
+  if (!locked && s_was_locked && mouse && sane) {
+    // Lock-on just ended with the mouse in hand: the mouse camera carries on from the lock's view.
+    g_free.on = true;
+    g_free.yaw = s_yaw;
+    float y, d;
+    AnglesOf(FreePivot(hero, look), eye, y, g_free.pitch, d);
+    g_free.weight = 1;
+    s_weight = 0;
+  }
+  s_was_locked = locked;
+  if (!g_free.on && !locked && mouse && sane && std::fabs(mouse_yaw) + std::fabs(mouse_pitch) > 0.002f) {
+    float d;
+    AnglesOf(FreePivot(hero, look), eye, g_free.yaw, g_free.pitch, d);  // start from the game's view
+    g_free.dist = -1;
+    g_free.on = true;
+    REXLOG_INFO("[spyro/mousecam] on");
+  }
+  if (g_free.on && mouse) {
+    // Mouse right turns the view right: the eye swings the other way round the hero (yaw grows
+    // toward screen left); mouse down tilts the view down: the eye rises.
+    g_free.yaw = WrapAngle(g_free.yaw - mouse_yaw);
+    g_free.pitch = std::clamp(g_free.pitch + mouse_pitch, kFreeMinPitch, kFreeMaxPitch);
+  }
+  g_free.weight = std::clamp(g_free.weight + (g_free.on ? dt : -dt) / 0.25f, 0.0f, 1.0f);
+  if (!locked && s_weight <= 0 && g_free.weight > 0 && sane) {
+    ApplyFreeLook(base, cam, hero, eye, look, dt);
+    return;
+  }
+
   if (!locked && s_weight <= 0) {
     g_stick_turn = 0;
     g_marker_on = false;
     return;
   }
-
-  constexpr uint32_t kRight = 0x574, kUp = 0x580, kFwd = 0x58C, kEye = 0x598, kLook = 0x5A4;
-  Vec3 hero = LoadVec(base, cam + kCamFollow), eye = LoadVec(base, cam + kEye), look = LoadVec(base, cam + kLook);
-  if (!Sane(hero) || !Sane(eye)) return;
+  if (!sane) return;
   float game_yaw = std::atan2(eye.x - hero.x, eye.z - hero.z);  // direction hero -> eye
   static float s_want = 0;
   if (locked) {
-    if (s_weight <= 0) s_yaw = s_want = game_yaw;
+    if (s_weight <= 0) {
+      s_yaw = s_want = game_yaw;
+      // Locking on while the mouse camera has the view: start from that view, not the game's.
+      if (g_free.weight > 0) {
+        s_yaw = g_free.yaw;
+        s_weight = 1;
+        g_free.weight = 0;
+      }
+    }
     // Eye on the far side of the hero. In melee range the direction flips as Spyro dodges
     // around the enemy, so it is only updated while the target is a few units away.
     float tx = target.x - hero.x, tz = target.z - hero.z;
@@ -400,9 +537,8 @@ void OverrideCamera(uint8_t* base, uint32_t cam) {
   new_look.x += (target.x - new_look.x) * pull;
   new_look.z += (target.z - new_look.z) * pull;
 
-  Vec3 f = Normalize({new_look.x - new_eye.x, new_look.y - new_eye.y, new_look.z - new_eye.z});
-  Vec3 r = Normalize({f.z, 0, -f.x});
-  Vec3 u{f.y * r.z - f.z * r.y, f.z * r.x - f.x * r.z, f.x * r.y - f.y * r.x};
+  Vec3 r, u, f;
+  Axes(new_eye, new_look, r, u, f);
 
   // Spyro's controls still follow the game's camera: the left stick is turned by the same angle
   // as the view (LockOnPad), so "up" keeps meaning "away from the camera".
@@ -424,33 +560,7 @@ void OverrideCamera(uint8_t* base, uint32_t cam) {
   } else {
     g_marker_on = false;
   }
-
-  StoreVec(base, cam + kRight, r);
-  StoreVec(base, cam + kUp, u);
-  StoreVec(base, cam + kFwd, f);
-  StoreVec(base, cam + kEye, new_eye);
-  StoreVec(base, cam + kLook, new_look);
-  StoreVec(base, cam + 0x5DC, u);  // copies the game reads back from the node (sub_8215C1A0)
-  StoreVec(base, cam + 0x5E8, f);
-  StoreVec(base, cam + 0x5F4, new_eye);
-
-  // The camera scene node: [cam+0x10]+4 = node data; its matrix rows at +0x10 (right, up,
-  // forward, position; the w word of each row holds flags), dirty bits as the game sets them.
-  uint32_t node = Load32(base, cam + 0x10);
-  if (node < 0x1000) return;
-  uint32_t data = Load32(base, node + 4);
-  if (data < 0x1000) return;
-  uint32_t m = data + 0x10;
-  StoreVec(base, m + 0x00, r);
-  StoreVec(base, m + 0x10, u);
-  StoreVec(base, m + 0x20, f);
-  StoreVec(base, m + 0x30, new_eye);
-  uint32_t flags = Load32(base, m + 0x0C) & ~0x00020003u;
-  flags = __builtin_bswap32(flags);
-  std::memcpy(base + m + 0x0C, &flags, 4);
-  uint32_t parent = Load32(base, data + 0xA0);
-  if (parent >= 0x1000) base[parent + 3] |= 3;
-  base[data + 3] |= 12;
+  WriteView(base, cam, r, u, f, new_eye, new_look);
 }
 
 // Research (env SPYRO_CAMPULL=<units>[,<rise per unit>], draw distance, WORK_LOG 127): the
@@ -647,16 +757,8 @@ void LockOnPad(uint8_t* base, uint32_t state) {
   bool pressed = r3 && !g_r3_was_down;
   g_r3_was_down = r3;
   if (CurrentMenuId() != 0x24) return;  // menus, cutscene movies: leave the pad alone
-  if (GetSetting(kLockOnCamera) != 0) {  // Recomp Settings: Lock-on camera Off - R3 is the game's
-    std::lock_guard<std::mutex> lock(g_mutex);
-    g_target = 0;
-    return;
-  }
-  if (r3) {
-    buttons &= ~kButtonR3;  // R3 belongs to the lock-on
-    uint16_t be = __builtin_bswap16(buttons);
-    std::memcpy(base + state + 4, &be, 2);
-  }
+  // The view is turned from the game's camera (lock-on, or the mouse camera - which works with the
+  // Lock-on camera setting off too): turn the left stick with it.
   if (float turn = g_stick_turn.load(); turn != 0) {
     // Left stick (state +8 x, +10 y) turned with the view. Stick angle atan2(x, y) grows
     // clockwise, world yaw anticlockwise, so the stick turns by -turn.
@@ -673,6 +775,16 @@ void LockOnPad(uint8_t* base, uint32_t state) {
       uint32_t packet = __builtin_bswap32(Load32(base, state) + (g_frame.load() << 16));
       std::memcpy(base + state, &packet, 4);
     }
+  }
+  if (GetSetting(kLockOnCamera) != 0) {  // Recomp Settings: Lock-on camera Off - R3 is the game's
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_target = 0;
+    return;
+  }
+  if (r3) {
+    buttons &= ~kButtonR3;  // R3 belongs to the lock-on
+    uint16_t be = __builtin_bswap16(buttons);
+    std::memcpy(base + state + 4, &be, 2);
   }
 
   std::lock_guard<std::mutex> lock(g_mutex);

@@ -1,0 +1,26 @@
+# Customize controls (WORK_LOG 150), with -AutoBoot -SaveBase testuser_avalar (in the level at ~31 s):
+# pause -> Options -> Recomp Settings -> "Customize controls" (2nd row) -> chooser -> Keyboard and
+# mouse screen (scroll a little) -> back -> Controller screen -> back -> close.
+# The parchment / button icons come from project\run\ui_cache (taken on the Moves screen in run ctl2;
+# tests\see_moves.txt opens that screen).
+# <seconds> <buttons> [hold]
+33       START   # pause (0x0F)
+@0F 1.5  DOWN    # Moves
+@0F 2.2  DOWN    # Armor
+@0F 2.9  DOWN    # Elements
+@0F 3.6  DOWN    # Options
+@0F 4.5  A       # pause Options (0x17)
+@17 1.5  DOWN    # Tutorial
+@17 3    LEFT    # Recomp Settings button
+@17 5    A       # Recomp Settings (0x22)
+@22 3    DOWN    # Customize controls
+@22 5    A       # chooser
+@22 8    A       # Keyboard and mouse
+@22 11   DOWN
+@22 11.5 DOWN
+@22 12   DOWN
+@22 15   B       # back to the chooser
+@22 17   DOWN    # Controller
+@22 18   A
+@22 22   B       # chooser
+@22 24   B       # closed: Recomp Settings again

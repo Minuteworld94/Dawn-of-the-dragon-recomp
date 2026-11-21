@@ -38,6 +38,7 @@
 #include "guest_memory.h"
 #include "plume_renderer.h"
 #include "spyro_achievements.h"
+#include "spyro_controls.h"
 #include "spyro_settings.h"
 
 namespace {
@@ -992,9 +993,9 @@ void PlaceSettingsRows(uint8_t* base) {
       if (p == 0 && sound_host) x = vx + kSoundLabelDx;
       if (p == 1) x = value_x;
       if (p == 2 || p == 3) x = ax[p - 2];
-      // "Achievements" is a plain button row (WORK_LOG 144): just the word - its (empty) value
-      // text and its arrows are parked off-screen; the highlight glows stay.
-      if (i == spyro::kAchievements && p >= 1 && p <= 3) x = -10.0f;
+      // "Achievements" and "Customize controls" are plain button rows (WORK_LOG 144, 150): just the
+      // word - their (empty) value text and arrows are parked off-screen; the highlight glows stay.
+      if (spyro::IsButtonRow(i) && p >= 1 && p <= 3) x = -10.0f;
       Store32F(base, s.ours[p] + 0x14, x);
       Store32F(base, s.ours[p] + 0x18, y + dy);
     }
@@ -1991,7 +1992,7 @@ void RecompMenuRowEvent(PPCContext& ctx, uint8_t* base, uint32_t row, uint32_t s
     GuestCall(ctx, base, sub_822C2B50, g_recomp.menu, row, 0, 0);
     s_refreshing = false;
   }
-  if (pressed && row == spyro::kAchievements) return;  // left / right on "Achievements": nothing (A opens it)
+  if (pressed && spyro::IsButtonRow(int(row))) return;  // left / right on a button row: nothing (A opens it)
   if (pressed && row < kNumSettings) {
     SettingRow& s = g_settings[row];
     s.value = base[s.row + 0x338];
@@ -2419,6 +2420,12 @@ REX_FUNC(sub_822C2B50) {
   if (g_recomp.built && g_recomp.recomp_mode && menu == g_recomp.menu && row == uint32_t(spyro::kAchievements) &&
       event == 1) {
     spyro::achievements::OpenList();
+    return;
+  }
+  // A on "Customize controls": the controls screens (spyro_controls.cpp, WORK_LOG 150).
+  if (g_recomp.built && g_recomp.recomp_mode && menu == g_recomp.menu && row == uint32_t(spyro::kControls) &&
+      event == 1) {
+    spyro::controls::OpenMenu();
     return;
   }
   __imp__sub_822C2B50(ctx, base);

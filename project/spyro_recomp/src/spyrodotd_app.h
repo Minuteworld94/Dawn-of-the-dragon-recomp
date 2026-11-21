@@ -13,6 +13,7 @@
 #include <rex/ui/window.h>
 
 #include "plume_renderer.h"
+#include "spyro_controls.h"
 #include "spyro_settings.h"
 
 class SpyroDotdApp : public rex::ReXApp {
@@ -28,7 +29,10 @@ class SpyroDotdApp : public rex::ReXApp {
   // Override virtual hooks for customization:
   // void OnPostInitLogging() override {}
   // Recomp Settings: load recomp_settings.ini, window mode, and the chosen GPU backend.
-  void OnPreSetup(rex::RuntimeConfig& config) override { spyro::OnPreSetup(config); }
+  void OnPreSetup(rex::RuntimeConfig& config) override {
+    spyro::OnPreSetup(config);
+    spyro::controls::Load();  // controls.ini (Customize controls, WORK_LOG 150)
+  }
   // void OnLoadXexImage(std::string& xex_image) override {}
   // Analysis aid (env SPYRO_IMAGEDUMP=1): write the decrypted, relocated guest image (0x82000000,
   // 0x8E0000 bytes) to image_dump.bin in the working directory once, so offline scripts can scan
@@ -46,6 +50,8 @@ class SpyroDotdApp : public rex::ReXApp {
   void OnPostSetup() override {
     if (spyro::PlumeActive() && window())
       spyro::plume_renderer::SetWindow(window()->GetNativeWindowHandle());
+    // Keyboard and mouse controls: mouse motion and the wheel come from the window (WORK_LOG 150).
+    spyro::controls::Attach(window());
   }
   // void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {}
   // std::unique_ptr<rex::ui::ImGuiDialog> CreateAchievementsOverlay() override;
