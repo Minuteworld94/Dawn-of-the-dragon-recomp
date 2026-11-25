@@ -3,7 +3,7 @@
 A native PC port of **The Legend of Spyro: Dawn of the Dragon** (Xbox 360) for **Windows** and
 **Linux / Steam Deck**, made by *static recompilation*: the game's PowerPC code is translated to C++
 ahead of time with the [reXglue SDK](https://github.com/rexglue/rexglue-sdk) and compiled into a
-normal program. Graphics run on **plume**, our own renderer that replaces the game's Xbox 360
+normal program. Graphics run on **plume**, by renderbag and contributors. this renderer that replaces the game's Xbox 360
 Direct3D layer (Direct3D 12 on Windows, Vulkan on Linux), instead of emulating the Xbox 360 GPU.
 
 > **This recomp is made with claude with bugtesting, feature suggestions and overall guidance done by me.**
