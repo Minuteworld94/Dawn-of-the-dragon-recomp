@@ -12,8 +12,8 @@ Direct3D layer (Direct3D 12 on Windows, Vulkan on Linux), instead of emulating t
 > and my prompts have thought put into them. the game runs and looks incredible at this stage. I know what I
 > am doing. any future decompilation/recompilation projects by me on this site will be done with claude.
 
-> **Pre-alpha.** It boots, plays and has been played through the first three levels. Expect bugs.
-> Bug reports with the newest file from the `logs` folder are very welcome.
+> **Pre-alpha.** It boots, plays and has been played through the first three levels by me. youtuber Rafaelão
+> has beaten the game with minimal issues but you should still expect bugs. Bug reports with the newest file from the `logs` folder are very welcome.
 
 **You need your own copy of the game.** This project contains no game files. It works with the
 Xbox 360 disc *The Legend of Spyro: Dawn of the Dragon (USA, Europe)*, as a disc image (`.iso`) or
