@@ -10,7 +10,7 @@ Direct3D layer (Direct3D 12 on Windows, Vulkan on Linux), instead of emulating t
 > if you have a problem with that, **ignore this project.** I will not tolerate crying about AI usage in
 > **any form** and issues pertaining to this will be swiftly closed. I like working with claude on these
 > and my prompts have thought put into them. the game runs and looks incredible at this stage. I know what I
-> am doing. any future decompilation/recompiation projects by me on this site will be done with claude.
+> am doing. any future decompilation/recompilation projects by me on this site will be done with claude.
 
 > **Pre-alpha.** It boots, plays and has been played through the first three levels. Expect bugs.
 > Bug reports with the newest file from the `logs` folder are very welcome.
