@@ -6,6 +6,12 @@ ahead of time with the [reXglue SDK](https://github.com/rexglue/rexglue-sdk) and
 normal program. Graphics run on **plume**, our own renderer that replaces the game's Xbox 360
 Direct3D layer (Direct3D 12 on Windows, Vulkan on Linux), instead of emulating the Xbox 360 GPU.
 
+> **This recomp is made with claude with bugtesting, feature suggestions and overall guidance done by me.**
+> if you have a problem with that, **ignore this project.** I will not tolerate crying about AI usage in
+> **any form** and issues pertaining to this will be swiftly closed. I like working with claude on these
+> and my prompts have thought put into them. the game runs and looks incredible at this stage. I know what I
+> am doing. any future decompilation/recompiation projects by me on this site will be done with claude.
+
 > **Pre-alpha.** It boots, plays and has been played through the first three levels. Expect bugs.
 > Bug reports with the newest file from the `logs` folder are very welcome.
 
