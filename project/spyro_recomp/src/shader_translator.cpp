@@ -1,10 +1,18 @@
 #include "shader_translator.h"
 
+#if defined(_WIN32)
 #define NOMINMAX
 #include <windows.h>
 #include <unknwn.h>  // dxcapi.h needs the COM declarations (IUnknown, IStream), which the
 #include <objidl.h>  // build's WIN32_LEAN_AND_MEAN leaves out of windows.h
 #include <dxcapi.h>
+#else
+// Linux (WORK_LOG 156): DXC's own Windows-type shims, then libdxcompiler.so from the game's folder.
+#include <dlfcn.h>
+#include <dxc/WinAdapter.h>
+#include <dxc/dxcapi.h>
+#include "spyro_platform.h"
+#endif
 
 #define SPYRO_SHADER_IN_GAME
 #include "pch.h"  // project\shader_recomp: the translator's helpers (big-endian fields, fmt)
@@ -38,28 +46,40 @@ std::mutex g_mutex;
 std::condition_variable g_wake;
 std::deque<Job> g_queue;
 std::unordered_map<uint64_t, State> g_state;
-std::unordered_map<uint64_t, std::vector<uint8_t>> g_dxil;
+std::unordered_map<uint64_t, std::vector<uint8_t>> g_dxil;  // the compiled shaders (DXIL or SPIR-V)
 uint32_t g_busy = 0;
+bool g_spirv = false;  // plume's Vulkan backend: SPIR-V instead of DXIL (WORK_LOG 156)
 
 std::string FileName(uint64_t hash) {
   char name[64];
-  std::snprintf(name, sizeof(name), "%s/%016llX.dxil", kDir, static_cast<unsigned long long>(hash));
+  std::snprintf(name, sizeof(name), "%s/%016llX.%s", kDir, static_cast<unsigned long long>(hash),
+                g_spirv ? "spv" : "dxil");
   return name;
 }
 
-// dxcompiler.dll (+ dxil.dll, which signs the DXIL) from the game's folder, loaded once.
+// dxcompiler.dll (+ dxil.dll, which signs the DXIL) from the game's folder, loaded once; on Linux
+// libdxcompiler.so (SPIR-V needs no signing).
 DxcCreateInstanceProc DxcFactory() {
   static DxcCreateInstanceProc s_create = [] {
+#if defined(_WIN32)
     HMODULE dll = LoadLibraryW(L"dxcompiler.dll");
     auto create = dll ? reinterpret_cast<DxcCreateInstanceProc>(GetProcAddress(dll, "DxcCreateInstance")) : nullptr;
+    const char* name = "dxcompiler.dll";
+#else
+    std::string path = (spyro::platform::ExeDir() / "libdxcompiler.so").string();
+    void* so = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+    if (!so) so = dlopen("libdxcompiler.so", RTLD_NOW | RTLD_LOCAL);
+    auto create = so ? reinterpret_cast<DxcCreateInstanceProc>(dlsym(so, "DxcCreateInstance")) : nullptr;
+    const char* name = "libdxcompiler.so";
+#endif
     if (!create)
-      REXLOG_ERROR("[plume] dxcompiler.dll not found next to the game - shaders missing from the cache stay invisible");
+      REXLOG_ERROR("[plume] {} not found next to the game - shaders missing from the cache stay invisible", name);
     return create;
   }();
   return s_create;
 }
 
-// HLSL -> DXIL with the arguments SpyroShaderRecomp uses for the cache (dxc_compiler.cpp).
+// HLSL -> DXIL / SPIR-V with the arguments SpyroShaderRecomp uses for the cache (dxc_compiler.cpp).
 bool Compile(const std::string& hlsl, bool pixel, std::vector<uint8_t>* dxil, std::string* errors) {
   thread_local IDxcCompiler3* compiler = nullptr;
   if (!compiler) {
@@ -70,10 +90,22 @@ bool Compile(const std::string& hlsl, bool pixel, std::vector<uint8_t>* dxil, st
     }
   }
   DxcBuffer source{hlsl.data(), hlsl.size(), 0};
-  const wchar_t* args[] = {pixel ? L"-T ps_6_0" : L"-T vs_6_0", L"-HV 2021", L"-all-resources-bound",
-                           L"-Wno-ignored-attributes", L"-Qstrip_reflect", L"-Qstrip_debug"};
+  const wchar_t* args[8];
+  UINT32 count = 0;
+  args[count++] = pixel ? L"-T ps_6_0" : L"-T vs_6_0";
+  args[count++] = L"-HV 2021";
+  args[count++] = L"-all-resources-bound";
+  if (g_spirv) {
+    args[count++] = L"-spirv";
+    args[count++] = L"-fvk-use-dx-layout";
+    if (!pixel) args[count++] = L"-fvk-invert-y";  // Vulkan's clip space has y pointing down
+  } else {
+    args[count++] = L"-Wno-ignored-attributes";
+    args[count++] = L"-Qstrip_reflect";
+  }
+  args[count++] = L"-Qstrip_debug";
   IDxcResult* result = nullptr;
-  if (FAILED(compiler->Compile(&source, args, UINT32(std::size(args)), nullptr, IID_PPV_ARGS(&result))) || !result) {
+  if (FAILED(compiler->Compile(&source, args, count, nullptr, IID_PPV_ARGS(&result))) || !result) {
     *errors = "Compile call failed";
     return false;
   }
@@ -150,6 +182,8 @@ void StartWorkers() {
 }
 
 }  // namespace
+
+void SetSpirv(bool spirv) { g_spirv = spirv; }
 
 void Request(uint64_t hash, const uint8_t* container, uint32_t size) {
   {

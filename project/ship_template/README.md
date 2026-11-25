@@ -1,10 +1,10 @@
 # Spyro: Dawn of the Dragon Recomp
 
-A native Windows PC port of **The Legend of Spyro: Dawn of the Dragon** (Xbox 360), made by
-*static recompilation*: the game's PowerPC code is translated to C++ ahead of time with the
-[reXglue SDK](https://github.com/rexglue/rexglue-sdk) and compiled into a normal Windows program.
-Graphics run on **plume**, our own Direct3D 12 renderer that replaces the game's Xbox 360 Direct3D
-layer, instead of emulating the Xbox 360 GPU.
+A native PC port of **The Legend of Spyro: Dawn of the Dragon** (Xbox 360) for **Windows** and
+**Linux / Steam Deck**, made by *static recompilation*: the game's PowerPC code is translated to C++
+ahead of time with the [reXglue SDK](https://github.com/rexglue/rexglue-sdk) and compiled into a
+normal program. Graphics run on **plume**, our own renderer that replaces the game's Xbox 360
+Direct3D layer (Direct3D 12 on Windows, Vulkan on Linux), instead of emulating the Xbox 360 GPU.
 
 > **Pre-alpha.** It boots, plays and has been played through the first three levels. Expect bugs.
 > Bug reports with the newest file from the `logs` folder are very welcome.
@@ -22,6 +22,24 @@ as extracted game files.
    folder. An ISO is unpacked once into the `game` folder next to the launcher.
 
 Hold **Shift** while starting `SpyroRecomp.exe` to pick a different copy of the game later.
+
+### Linux / Steam Deck (experimental)
+
+A native Linux build (not Proton): plume on Vulkan, no Xbox 360 GPU emulation. Tested on a Steam
+Deck OLED (SteamOS); other 64-bit x86 Linux PCs with Vulkan drivers and X11 or XWayland should work.
+
+1. Download the `-linux.tar.gz` release and unpack it **on the Linux machine** (right-click →
+   Extract), e.g. into `~/Games/SpyroRecomp`.
+2. Put your `.iso` next to `SpyroRecomp` and double-click `SpyroRecomp` (Steam Deck: in Desktop
+   Mode). It is unpacked once into the `game` folder.
+3. Steam Deck Gaming Mode: Steam → *Add a Non-Steam Game* → `SpyroRecomp` (no Proton / compatibility
+   tool - it is a native program).
+
+Linux-only settings: Resolution **800p** (the Deck's 1280 x 800) and **Aspect ratio** 16:9 / 16:10
+(16:10 shows more above and below instead of stretching). Defaults: 800p, 16:10, Borderless.
+`recomp_settings.ini` next to `SpyroRecomp` holds every Recomp Setting and can be edited while the
+game is closed. **Known issue:** changing Resolution in the game can freeze it on the Steam Deck -
+change it in `recomp_settings.ini` for now. See the `README.txt` in the download for more.
 
 ### Settings
 
@@ -46,8 +64,9 @@ PC settings live inside the game's own menus, under **Recomp Settings**:
 | Lock-on camera | On, Off |
 | Online co-op | coming later |
 
-Settings are saved in `bin\recomp_settings.ini` (controls in `bin\controls.ini`), saves in `user`,
-logs in `logs`.
+Settings are saved in `bin\recomp_settings.ini` (Linux: `recomp_settings.ini` next to
+`SpyroRecomp`) - readable, with the choices listed above each setting, so it can also be edited by
+hand while the game is closed. Controls are in `bin\controls.ini`, saves in `user`, logs in `logs`.
 
 ### Keyboard, mouse and controller
 
@@ -157,13 +176,35 @@ Windows 10/11 x64. Everything is portable (nothing is installed system-wide).
 7. **Package**: `project\make-ship.ps1` assembles a release folder + zip like the published ones.
    For development, `project\PLAY.bat` runs the game against the extracted game in `extracted game\`.
 
+### Linux build (cross-compiled on Windows)
+
+The Linux build is made on Windows with clang + lld against the Steam Runtime 3 "sniper" SDK
+(glibc 2.31, so it runs on SteamOS and most current distributions):
+
+1. Get the sniper SDK sysroot tarball (`steamrt-sniper-sdk-sysroot-*.tar.gz` from Valve's Steam
+   Runtime downloads) and unpack it with `TOOLS\linux\extract_sysroot.py` into `TOOLS\linux-sysroot`;
+   the Linux DirectXShaderCompiler release into `TOOLS\dxc-linux`; build the small pkg-config with
+   `TOOLS\linux\pkgconfig\build.ps1`.
+2. Build the reXglue SDK and the game with the `linux-cross-release` presets (toolchain file
+   `TOOLS\linux\toolchain-x86_64-linux.cmake`; never pass `CMAKE_CXX_FLAGS` - it replaces the
+   toolchain's flags):
+   ```powershell
+   cd project\spyro_recomp
+   cmake --preset linux-cross-release "-DREXSDK_DIR=$PWD\..\..\TOOLS\src\rexglue-sdk"
+   cmake --build --preset linux-cross-release
+   ```
+   The generated code from the Windows codegen step is shared (codegen is skipped when cross-compiling).
+3. **Package**: `project\make-ship-linux.ps1 -Version <v>` writes the `.tar.gz` (Linux file modes kept).
+
 ## Repository layout
 
 | Path | What |
 |---|---|
 | `project/spyro_recomp/src` | Everything hand-written: renderer (`plume_renderer.cpp`, `plume_hooks.cpp`), runtime shader translation (`shader_translator.cpp`), Recomp Settings menu (`spyro_hooks.cpp`, `spyro_settings.cpp`), achievements overlay (`spyro_achievements.cpp`, `spyro_ui.cpp`, `spyro_sound.cpp`), keyboard / mouse / controller bindings (`spyro_controls.cpp`, `test_input.cpp`), reading the game's `.KXE` data files (`spyro_kxe.cpp`), texture decoding, debug tools |
 | `project/spyro_recomp/*.toml` | reXglue codegen manifest and function boundaries |
-| `project/launcher` | `SpyroRecomp.exe`: game picker, ISO unpacker (XDVDFS), version check |
+| `project/launcher` | `SpyroRecomp.exe` / Linux `SpyroRecomp` (`launcher_linux.cpp`, SDL3): game picker, ISO unpacker (XDVDFS), version check |
+| `project/spyro_recomp/src/spyro_platform.*` | What the game needs from the operating system (Windows / Linux) |
+| `TOOLS/linux` | Linux cross-compile toolchain file, sysroot extractor, a small pkg-config |
 | `project/shader_recomp` | SpyroShaderRecomp, a fork of XenosRecomp adapted to this game |
 | `project/analysis` | Research scripts (Ghidra scripts, test runner `autotest-shots.ps1`, ...) |
 | `project/run/tests` | Scripted-controller test inputs |

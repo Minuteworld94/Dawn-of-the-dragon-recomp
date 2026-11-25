@@ -545,14 +545,15 @@ void OverrideCamera(uint8_t* base, uint32_t cam) {
   g_stick_turn = WrapAngle(std::atan2(f.x, f.z) - std::atan2(look.x - eye.x, look.z - eye.z));
 
   // Target marker (drawn by plume's present pass): the target projected with this view. The
-  // game's field of view is cam+0x56C (80 degrees, horizontal; 16:9 picture).
+  // game's field of view is cam+0x56C (80 degrees, horizontal); the vertical one follows the
+  // picture's shape (16:9, or 16:10 with the Linux port's Aspect ratio - WORK_LOG 159).
   Vec3 mark{target.x, target.y + kMarkerHeight, target.z};
   Vec3 d{mark.x - new_eye.x, mark.y - new_eye.y, mark.z - new_eye.z};
   float vz = d.x * f.x + d.y * f.y + d.z * f.z;
   float vx = d.x * r.x + d.y * r.y + d.z * r.z, vy = d.x * u.x + d.y * u.y + d.z * u.z;
   float fov = LoadF(base, cam + 0x56C);
   if (!(fov > 10 && fov < 170)) fov = 80;
-  float tan_h = std::tan(fov * 0.5f * 3.14159265f / 180.0f), tan_v = tan_h * 9.0f / 16.0f;
+  float tan_h = std::tan(fov * 0.5f * 3.14159265f / 180.0f), tan_v = tan_h / spyro::PictureAspect();
   if (locked && vz > 0.5f) {
     g_marker_x = 0.5f + kMarkerSignX * 0.5f * vx / (vz * tan_h);
     g_marker_y = 0.5f - 0.5f * vy / (vz * tan_v);

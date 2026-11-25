@@ -2705,3 +2705,238 @@ NEXT STEPS (in order):
      group at 13", "button icons: all found"; screenshots ico1/ico2: every keyboard and controller row has
      the right icon (D-pad zoom: up/down/left/right light the right arm). Next session: "button icons
      loaded from ui_cache/icons.bin". New test tests\controls_icons.txt.
+[155] 2026-11-20  HOTFIX PACKAGED: v0.2.5-prealpha-hotfix ("Pre-alpha 2.5 hotfix - button icons in Customize
+     controls"; 2.5 itself was published 2026-11-21T00:53Z, checked via the GitHub API). RELEASE_NOTES.md:
+     hotfix section on top (icons from the fonts, parchment from the game files, nothing shipped) + the 2.5
+     notes; README.txt / README.md: pictures "taken from your copy of the game when it starts", repo layout
+     + spyro_kxe.cpp; gitignore + make-ship: TOOLS\kxe source goes into the repo (not its exe). make-ship:
+     zip 35.4 MB (spyrodotd.exe / rexruntime / rexgpu-xenos 21:03), repo 139 files, no personal data, no
+     game data. ship\RELEASE_LINK.txt pre-filled (tag v0.2.5-prealpha-hotfix, target main, prerelease).
+     NOT PUSHED YET - waiting for the user's go-ahead (they said "ill push an updated build").
+     PUSHED (user tested the zip, then: "push it"): commit 1631972 on main (Minuteworld94 noreply, 19 files:
+     spyro_kxe.{h,cpp}, spyro_controls, spyrodotd_app.h, CMakeLists, TOOLS/kxe source, docs, templates,
+     tests\controls_icons.txt). Pre-filled release page (ship\RELEASE_LINK.txt) + Explorer at the zip opened:
+     the user attaches SpyroRecomp-v0.2.5-prealpha-hotfix.zip and publishes. NOT YET CONFIRMED PUBLISHED.
+[156] 2026-11-22  NATIVE LINUX PORT STARTED (user: "go full native linux ... switch the plume renderer on the linux
+     build to the vulkan plume backend, remove both xenos renderers only for linux ... replace the windows only
+     shit with shit for linux ... any tools you need, put in the TOOLS folder"; target: their Steam Deck).
+     STEP 1 DONE - plume on its VULKAN backend (testable on Windows: env SPYRO_PLUMEVK=1; Linux will always use
+     it). Found: plume compiles plume_vulkan.cpp on every platform; SpyroShaderRecomp already puts SPIR-V next
+     to the DXIL in spyro_shaders.bin (all 1063 entries); shader_common.h's __spirv__ path = constants through
+     buffer device addresses (push constants: u64 VS consts, u64 PS consts, u64 shared consts) + spec
+     constants at shared+276 (we already wrote sh[69] there). plume_renderer.cpp: g.vulkan; Init creates
+     CreateVulkanInterface() (D3D12 debug layer / crash logger / plume_d3d12.h only on Windows + D3D12);
+     upload buffers DEVICE_ADDRESSABLE (slot.upload_address); CreateLayout: Vulkan = one 32-byte push constant
+     range, no root descriptors; per draw: push the 3 addresses; BuiltinShader() picks DXIL / SPIR-V; game
+     shaders from e.spirv_offset; shader_override\<HASH>.spv; AsRenderWindow (HWND / SDL_Window* with plume's
+     SDL integration). shader_translator: SetSpirv() -> dxc -spirv -fvk-use-dx-layout (+ -fvk-invert-y for
+     vertex shaders, = SpyroShaderRecomp), shader_cache\<HASH>.spv. CMake: present_blit / ui_overlay also
+     compiled to SPIR-V headers (*_spv.h); their push constants: [[vk::push_constant]] structs of scalars
+     (offsets = the D3D cbuffer's). UI vertex inputs need [[vk::location(0/4/8)]] (Vulkan matches by
+     location - first try drew rainbow smears).
+     VERIFIED hands-off on the RTX 3080 (Vulkan): vk1 intro movie + level 3 identical to D3D12; vk3 popup
+     with the menu fire, Customize controls screens with parchment + icons; fps the same as D3D12 (60, the
+     same ~23 fps dip while a level loads; vk2 vs ico2).
+     NEXT: replace Windows-only code with portable code; Linux build environment; Linux build without the
+     Xenos renderers; Linux launcher; Steam Deck package.
+[157] 2026-11-22  LINUX PORT, STEP 2: WINDOWS-ONLY CODE REPLACED (builds + regression-tested on Windows).
+     NEW src\spyro_platform.{h,cpp}: SetGameWindow / GameWindow / GameWindowFocused / CloseGameWindow / KeyDown(vk)
+     / KeyChar(vk) / MousePosition / PlayWav / FontFiles(weight) / ExeDir - Win32 (as before: GetAsyncKeyState,
+     GetForegroundWindow, PlaySoundW, %WINDIR%\Fonts) and Linux = SDL3 (SDL_GetKeyboardState with a VK->scancode
+     table, SDL_GetMouseState, SDL_GetKeyboardFocus, SDL audio stream for the whoosh, SDL_EVENT_WINDOW_CLOSE_
+     REQUESTED for Quit to Desktop, fonts: fonts\ next to the game (segoeui / selawk*), then Noto Sans / DejaVu /
+     Liberation system paths). NEW src\spyro_vk.h: the Windows VK_* codes stay OUR key names on every platform
+     (controls.ini is the same file everywhere). Callers moved: spyro_controls (g_hwnd removed), spyro_achievements
+     (13 key reads), plume_renderer (focus + F9), spyro_sound, spyro_ui (font search, logs the file used),
+     spyro_hooks (Quit to Desktop on Linux), spyrodotd_app.h (SetGameWindow in OnPostSetup). guest_memory.cpp:
+     Linux path = rex::memory::QueryProtect (/proc/self/maps) with the same per-thread cache (was "always
+     readable" = crash risk). spyro_drawdist.cpp: research stack traces via CaptureStack/ExeBase (backtrace() on
+     Linux). hang_dump / profiler / findeye stay Windows-only (already guarded). shader_translator: dlopen
+     libdxcompiler.so + <dxc/WinAdapter.h> on Linux. spyro_settings: Linux Renderer row = {"plume - Vulkan"} only,
+     always the plume branch (no Xenos plugin).
+     SDK edits (window_sdl.cpp, Linux only, "[spyro recomp]"): SDL_WINDOW_VULKAN on the window (plume's
+     SDL_Vulkan_CreateSurface) and GetNativeWindowHandle() returns the SDL_Window*. CMake: Linux = no GPU plugins,
+     PLUME_SDL3_VULKAN_ENABLED, link SDL3 + dl, TOOLS/dxc-linux (include + libdxcompiler.so, copied next to the
+     exe), dxc host tool chosen by CMAKE_HOST_WIN32.
+     Regression (Windows D3D12, reg1): font "C:\WINDOWS\Fonts\segoeui.ttf", whoosh played, both controls screens.
+     NEXT: Linux build environment = WSL2 (virtualization is on; WSL feature not installed - the user must enable
+     it as admin: wsl --install --no-distribution --web-download, then reboot; LTSC has no Store). Plan: import a
+     build distro into TOOLS\wsl (Steam Runtime "sniper" SDK = glibc 2.31 so the binary runs on SteamOS), DXC
+     Linux release into TOOLS\dxc-linux, build SDK (-DREXGLUE_USE_VULKAN=OFF) + game, smoke-test in WSL, then a
+     Linux launcher (SDL3: message boxes, file dialog, window-surface progress bar, XDVDFS unpacker from
+     launcher.cpp, portable SHA-256) and a Steam Deck package.
+[158] 2026-11-23  LINUX CROSS-COMPILE ON WINDOWS (user: "lets do it without wsl. ill test it on my steamdeck. begin
+     building it").
+     TOOLS added: downloads\steamrt-sniper-sdk-sysroot-3.0.20261021.tar.gz (Valve's Steam Runtime 3 "sniper"
+     SDK sysroot, 1.18 GB, repo.steampowered.com/steamrt-images-sniper/snapshots/latest-public-stable) ->
+     TOOLS\linux-sysroot (2.6 GB) by TOOLS\linux\extract_sysroot.py (Python tarfile: keeps headers, 64-bit
+     libs, GCC runtimes, pkg-config files; file symlinks -> copies, folder symlinks -> junctions; 41 unneeded
+     links unresolved; copies GCC 10's libgcc_s.so linker script into the GCC 14 folder). Debian 11 base =
+     glibc 2.31 (runs on SteamOS); its own GCC 10 libstdc++ is too old (no std::bit_cast / byteswap) -> Valve's
+     GCC 14 in usr/lib/gcc-14 (headers usr/lib/gcc-14/x86_64-linux-gnu/include/c++/14, static libstdc++.a in
+     usr/lib/gcc-14/lib/gcc/x86_64-linux-gnu/14; NO libgcc_eh.a there -> libgcc_s stays shared).
+     TOOLS\dxc-linux = DXC v1.9.2609 linux_dxc_2026_09_28.x86_x64.tar.gz (bin/dxc, lib/libdxcompiler.so,
+     include/dxc/WinAdapter.h).
+     TOOLS\linux\toolchain-x86_64-linux.cmake: clang/lld from TOOLS\llvm, --target x86_64-linux-gnu,
+     CMAKE_SYSROOT, --gcc-install-dir=<GCC 14> (in *_FLAGS_INIT - so NEVER pass -DCMAKE_CXX_FLAGS on the command
+     line: the first build used GCC 10 headers because of that), -march=x86-64-v2, -static-libstdc++, find
+     roots, our pkg-config. TOOLS\linux\pkgconfig\pkg-config.cpp (+build.ps1): a minimal pkg-config.exe (the
+     SDK's ui CMake REQUIRES pkg-config for x11-xcb / wayland-client; SDL3 uses it for audio / dbus / ...):
+     .pc parsing, variables, Requires(.private), version constraints, sysroot -I/-L, escaped spaces.
+     Test: a C++23 program links (NEEDED libc / libm / libgcc_s / ld-linux; GLIBC symbols <= 2.26).
+     Preset linux-cross-release (host Windows): REXGLUE_USE_VULKAN=ON (the SDK refuses to configure without
+     one graphics backend - its Xenos Vulkan plugin is built but never loaded or shipped), Tracy off. SDL3
+     configure: X11 ON, Wayland OFF (no wayland-scanner on Windows), ALSA / PulseAudio / PipeWire / DBus /
+     udev / HIDAPI / Vulkan ON.
+     NEW project\launcher\launcher_linux.cpp (SDL3: message boxes, file dialog, window-surface progress bar;
+     XDVDFS unpacker as launcher.cpp; own SHA-256; game next to the launcher (.iso or extracted folder) used
+     without asking; exec()s bin/spyrodotd so Steam keeps tracking the process; --choose / --game).
+     NEW project\make-ship-linux.ps1 + package_tar.py (tar.gz with 0755 executables), ship_template\
+     README_LINUX.txt (Steam Deck: Desktop Mode first start, Add a Non-Steam Game, no Proton).
+     LINUX BUILD WORKS (cross-compiled): spyrodotd (62 MB) + librexruntime.so (SDK out\linux-amd64) +
+     libdxcompiler.so + SpyroRecomp launcher; NEEDED only libc / libm / libdl / libpthread / librt / libgcc_s /
+     X11 / X11-xcb / xcb / wayland-client (+ zlib / libstdc++ for libdxcompiler) - all on SteamOS; newest glibc
+     symbol 2.30. Fixes on the way: -march moved into the toolchain (a command-line CMAKE_CXX_FLAGS replaced
+     the GCC 14 flag), the build's automatic codegen step (it ran the freshly built LINUX rexglue on Windows)
+     -> generated\rexglue.cmake + the SDK template resources\templates\init\rexglue_cmake.inja skip codegen when
+     CMAKE_CROSSCOMPILING (the generated code is shared with the Windows build), 9 compile errors in our files
+     (research stack traces -> spyro::platform::CaptureStack / ExeBase; two more D3D12 pipeline checks guarded;
+     _stricmp; a variable inside a Windows-only block). The SDK and all generated code compiled unchanged.
+     Package: project\make-ship-linux.ps1 -Version v0.2.6-prealpha-test1 ->
+     ship\release-linux\SpyroRecomp-v0.2.6-prealpha-test1-linux.tar.gz (49.9 MB; 0755 on the launcher, game,
+     .so files; no game files, no personal data). NOT RUN on Linux yet - the user tests on the Steam Deck.
+[159] 2026-11-23  LINUX PORT OPTIONS: RESOLUTION 800p + ASPECT RATIO 16:9 / 16:10 (user, mid-task: "add an 800p
+     resolution option specific to this port", "and 16:9/16:10 and make a new 'aspect ratio' setting", "1280 x
+     800 is the steamdeck resolution ... in the resolution settings as '800p'").
+     SPYRO_DECK_OPTIONS (CMake: always on Linux; -DSPYRO_DECK_OPTIONS=ON tests it on Windows, target-only define):
+     kAspectRatio row after Resolution (14 rows; kMaxValues 5); Resolution {720p, 800p, 1080p, 1440p, 4K} with
+     800p = scale 800/720 (host 1422x800); Aspect ratio {16:9, 16:10}; Linux defaults 800p / 16:10 / display
+     mode Borderless. PictureAspect(): plume's present rect (and the overlays' picture rect) is 16:9 or 16:10;
+     present_blit push constants +Aspect (keeps the lock-on dot round; D3D12 root constant range 16 -> 32 bytes);
+     lock-on dot projection tan_v = tan_h / aspect.
+     16:10 VIEW: hook sub_823B31C8(camera, float2*) = the game's "set view opening" for every camera (+0x68 / +0x6C
+     horizontal / vertical half-opening tangents, +0x70 / +0x74 inverses, then node update sub_823B3ED0): a 16:9
+     ratio gets ty = tx / 1.6 ("Vert+", the game culls with it too); plume shows the 16:9 frame at 16:10.
+     (First try hooked only sub_820DA658's render camera = the FAR scene's camera 0x40047C20: fixed-camera
+     screenshots showed the near view unchanged, squeezed ~10% too thin.) Log "[spyro/aspect] camera ...:
+     half-opening 0.934 x 0.525 -> 0.934 x 0.584".
+     VERIFIED on Windows with the options on (fixed camera -Camera "7.5,25,-10,0,20,-60", avalar): 16:10 keeps
+     the same width of view and shows more above / below (rocks and water under the bridge), proportions
+     right; pause menu, Recomp Settings (14 rows: "800p", "16:10") and controls screens fine in the 16:10
+     frame. Windows build rebuilt WITHOUT the options: unchanged (13 rows; reg2).
+     With 800p + 16:10 on the Deck the 1422x800 frame is shown at exactly 1280x800 (horizontal downscale).
+[160] 2026-11-24  LINUX TEST 1 ON THE DECK: "could not be started" -> LAUNCHER REWORK, TEST 2 (user: "it doesn't start.
+     i put the iso in the same folder as spyrorecomp and it extracts but it opens a 'could not be started'").
+     That message = the launcher's exec of bin/spyrodotd (or chdir bin) failed; the old code showed no reason.
+     Checked offline: tar modes fine (0755 launcher / game / .so, 0755 dirs), ELF headers normal (PIE, interp
+     /lib64/ld-linux-x86-64.so.2 - the same as the launcher, which ran), NEEDED libs and symbol versions all on
+     SteamOS (GLIBC <= 2.30, GLIBCXX <= 3.4.29 for libdxcompiler). Not found offline; most likely theory: the
+     game file lost its "executable" mark (unpacked on Windows / copied, launcher alone made executable).
+     launcher_linux.cpp now: adds the exec bits to bin/spyrodotd before starting; starts the game as a CHILD
+     (fork + exec, launcher waits; Steam tracks the process tree) instead of exec()ing itself; exec failure ->
+     message with the failed step + strerror, and a fallback start through /lib64/ld-linux-x86-64.so.2 (works
+     without the exec bit, not on noexec drives); the game's stdout/stderr go through a pipe to the terminal
+     AND logs/game_output.log; if the game crashes / exits non-zero within 30 s -> message with exit code or
+     signal + its last 8 output lines; logs/launcher.log (start, mode, result; capped 512 KB); PruneLogs only
+     counts spyro_*.log. spyro_platform.cpp ExeDir(): /proc/self/exe = the loader (fallback start) -> cwd (bin).
+     README_LINUX: unpack ON the Deck (right-click > Extract), which logs to send.
+     Package: ship\release-linux\SpyroRecomp-v0.2.6-prealpha-test2-linux.tar.gz (49.9 MB). NOT RUN on Linux
+     (no Linux machine here) - the user tests on the Deck.
+[161] 2026-11-24  LINUX TEST 2 ON THE DECK: THE GAME STARTS - "Entrypoint XEX not found" + ABORT AT TEARDOWN -> TEST 3.
+     Test 2 result (the launcher fix of 160 worked: launcher.log "mode 755", "game started"; then "crashed (signal 6)
+     after 1 s"). game_output.log: "SDL video driver: x11", "[ERROR] Entrypoint XEX not found: .../game/default.xex",
+     "Fatal glibc error: pthread_mutex_lock.c:426 (__pthread_mutex_lock_full): assertion failed: e != ESRCH ||
+     !robust". (The user called it "an x11 entrypoint error" = the launcher's message showing those last lines.)
+     CAUSE 1: the disc's file is "Default.xex" (also in our Windows extracted game) and Linux names are
+     case-sensitive; reXglue's start check in ui\rex_app.cpp (compiled into OUR executable) tests exactly
+     game_data_root/"default.xex". The VFS itself already ignores case (Entry::GetChild, HostPathDevice
+     utf8_equal_case), so only that host-side check failed. FIX (SDK edit "[spyro recomp]" in rex_app.cpp): look
+     for the name ignoring case in that folder. Our own direct host path (parchment: Data/LVL000/LVL000.KXE - same
+     case on the disc) now goes through new spyro::platform::FindNoCase(root, {parts}) anyway.
+     CAUSE 2 (no stack available): on Linux rex::ShowSimpleMessageBox only prints to stderr, so the failed start
+     went straight to teardown (InvokeOnDestroy -> OnDestroy -> runtime_.reset() -> statics) and glibc aborted on a
+     mutex lock (robust/PI path - reXglue's PosixConditionBase uses robust mutexes; most likely a background thread
+     locking a destroyed/freed one). FIX (Linux only, spyrodotd_app.h): OnShutdown (the first step of OnDestroy,
+     after quitting or a failed start) -> spyro::platform::EndProcess(setup_done_ ? 0 : 1) = rex::FlushLogging +
+     _exit; setup_done_ set at the end of OnPostSetup. Nothing of ours saves at exit (settings / controls /
+     achievements / game saves are written when they change). Exit code 1 -> the launcher's "stopped right after
+     starting" message. NEW InstallCrashReport (OnPreSetup, Linux): SIGABRT prints backtrace_symbols_fd to stderr
+     (-> game_output.log, "spyrodotd(+0x...)" offsets); SIGSEGV/SIGBUS/SIGILL stay reXglue's (exception handler).
+     make-ship-linux.ps1 keeps each version's SpyroRecomp / spyrodotd / librexruntime.so in
+     ship\symbols-linux\<version>\ to look such offsets up (llvm-symbolizer --obj=... 0xOFFSET).
+     Windows build rebuilt (win-amd64-release): compiles and links; behaviour unchanged (case fallback only when the
+     exact name is missing; EndProcess / crash report Linux-only). Not run on Windows this time.
+     Package: ship\release-linux\SpyroRecomp-v0.2.6-prealpha-test3-linux.tar.gz (49.9 MB). NOT RUN on Linux.
+[162] 2026-11-24  LINUX TEST 3 ON THE DECK: THE GAME RUNS (390 s, clean exit 0) BUT WRONG PICTURE -> FIXED, TEST 4.
+     User photos: every plain-font letter one along the alphabet ("Accept" -> "Bddfqu", "Options" -> "Oqujpot",
+     also our injected "Quit to Desktop"; the decorated first letters and the LB icon right; green cell-border
+     lines inside the text), menu item icons = colour noise, a green striped column where the selection glow is,
+     the level floor pink / green instead of tan / purple. RADV VANGOGH, swapchain 1280x800, no errors in the log.
+     NOT reproduced on Windows: Vulkan + Deck options (800p, 16:10) on the RTX 3080, with the test save AND with an
+     empty save on the Deck's new-game route (tests\to_gameplay.txt, -SaveBase testuser_empty - new empty
+     snapshot folder) - text, icons, colours perfect. So Linux-only, and only what the game builds AT RUNTIME
+     (font / UI atlases, 512x512 8888) was wrong, disc textures (backgrounds) right.
+     CAUSE: plume_renderer.cpp DataAddress() added 0x1000 to every texture address >= 0xE0000000 (the 4 KB-page
+     physical heap). That is reXglue's HOST mapping offset for that view, which exists only when the allocation
+     granularity is > 4 KB (Windows 64 KB; xmemory.cpp PhysicalHeap::Initialize host_address_offset, the codegen
+     PCH's REX_PHYS_HOST_OFFSET = 0x1000 on Win32, 0 on Linux). On Linux the view is mapped in place, so those
+     textures were read 4 KB = one 32x32 tile off -> the font atlas one cell along, garbled icons / wrong colours.
+     FIX: kE0HostOffset = rex::memory::allocation_granularity() > 0x1000 ? 0x1000 : 0 (Windows unchanged).
+     (VirtualToPhysical's +0x1000 is the real Xbox GPU address and stays; vertex / index buffers go through the
+     0xA0000000 alias = no host offset on either system.) Ruled out on the way: LP64 / wchar_t, SDK rexcrt hooks
+     (not bound for this game; REXCRT_HEAP 0), rounding mode (same FPSCR code), compile flags (both x86-64-v2 +
+     sse4.1), shader translation (registers zeroed; same cache; "shader #N saved" = research dumps), language cvars,
+     decommit semantics (same on both: views are never really freed), file reads (pread).
+     ALSO: reXglue's guest memory is a named shm file; it was only unlinked at a clean Shutdown, so test 2's crash
+     and test 3's quick exit (EndProcess) left /dev/shm/xenia_memory_<tick> files (RAM) behind until reboot.
+     SDK memory_posix.cpp CreateFileMappingHandle ("[spyro recomp]"): shm_unlink right after creating it (mapping
+     stays via the fd). Launcher: removes leftover /dev/shm/xenia_memory_* at start (logged in launcher.log).
+     Windows rebuilt with SPYRO_DECK_OPTIONS back OFF (it was ON for the tests); regression reg162: main menu,
+     icons, level colours right. Package: ship\release-linux\SpyroRecomp-v0.2.6-prealpha-test4-linux.tar.gz.
+     NOT RUN on Linux.
+[163] 2026-11-24  LINUX TEST 4 WORKS ON THE DECK (user: "it works") - 800p "FISH EYE" FIXED; RESOLUTION-CHANGE SOFTLOCK
+     (DECK ONLY) -> DIAGNOSTICS; TEST 5.
+     FISH EYE at 800p only (user scrolled all resolutions): reproduced on Windows (Deck options, fixed camera: the
+     scene squashed into the top ~fifth vs 1080p). CAUSE plume_renderer.cpp viewport transform: W / H = host size /
+     scale in game pixels = 1279.8 / 719.99994 at 800p (800 / 1.1111112) -> "requested viewport 720 high <= H"
+     failed -> the band surface's clamped viewport registers were used instead of the full screen (tiled = false).
+     Every other scale gives exactly 720. FIX: +0.5 game pixel slack in that test; the band Resolve's whole-screen
+     size now std::lround (int() cut 1279.8 / 719.99994 to 1279 / 719 = one host row / column not copied).
+     VERIFIED (Vulkan, Deck options, autoboot level shot fix800 vs fix1080): same framing and proportions.
+     SOFTLOCK when changing resolution on the Deck: NOT reproduced on Windows Vulkan (SPYRO_AUTOTEST=1 +
+     SPYRO_AUTOTEST_RES: 800p -> 1080p live, then the MSAA presses - kept running). Old textures / framebuffers are
+     freed only after their frame's fence (dead_* per slot) - looked fine. No Deck log of it (the user's earlier
+     logs were gone). DIAGNOSTICS for the next try: hang_dump.cpp now also works on Linux (SIGUSR2 to every thread
+     in /proc/self/task, backtrace in the handler only for the asked tid, frames named sub_XXXXXXXX via
+     PPCFuncMappings / dladdr) + a "[hang] renderer:" line (plume_renderer::HangState: frame, last_call, waiting for
+     the GPU fence yes/no) + FlushLogging; starts after 6 s without Present (plume_hooks Start(6)). plume already
+     prints Vulkan errors (vkQueueSubmit / vkWaitForFences failed, e.g. device lost) to stderr = game_output.log.
+     Launcher keeps the previous session's output as logs/game_output_previous.log.
+     Also: the fire capture pushed 16 bytes of blit push constants, the shader reads 20 since the aspect value
+     (WORK_LOG 159) -> now 20 (aspect 16:9).
+     Windows: rebuilt with SPYRO_DECK_OPTIONS OFF again; regression reg163 (live 720p -> 1080p in the Recomp menu,
+     13 rows, level) fine. Package ship\release-linux\SpyroRecomp-v0.2.6-prealpha-test5-linux.tar.gz. NOT RUN on Linux.
+[164] 2026-11-24  TEST 5 ON THE DECK: "works great ... looks beautiful on my steamdeck oled" (resolution change in the
+     game still softlocks / crashes - no logs sent yet). User: "make a working .ini that can change the recomp
+     options from outside the game for this linux version and ship it to the github ... the .ini thing will be
+     for the softlock issue until we fix it". (Asked mid-task: "should work on any arch linux distro right?")
+     READABLE SETTINGS FILE (spyro_settings.cpp, shared with Windows): Save() writes a header (how to edit;
+     Deck options: "change Resolution HERE, not in the game"), [Recomp Settings], and per setting
+     "# <Name>: <choices>" + "# <one line of help>" + "key = <value text>" (resolution = 800p, msaa = MSAA 4x,
+     aspect_ratio = 16:10, ...). Load(): trims, skips #, ;, [section]; key = the file key or the menu's name
+     ("Anti-aliasing"), both compared lower case without spaces / punctuation (Squash); value = a choice's text
+     (same squash) or a number (old files + autotest-shots.ps1's numeric lines); "# comment" after a value cut
+     off; an unknown value -> REXLOG_WARN "'vsync = bogus' is not one of: On, Off - using On". The game still
+     rewrites the file at start (Load + Save) and on every menu change. VERIFIED on Windows (initest / initest2:
+     "resolution = 1080p" -> host 1920x1080, "msaa = msaa 4X  # comment", "Resolution = 1440p" -> 2560x1440,
+     "Anti-aliasing = MSAA 2x", "Lock-on camera = Off", bogus vsync warned; file rewritten readable).
+     LINUX: the launcher sets SPYRO_SETTINGS_FILE = <SpyroRecomp folder>/recomp_settings.ini (moves an old
+     bin/recomp_settings.ini up once); the release ships ship_template\recomp_settings_linux.ini there (Linux
+     defaults: 800p, 16:10, plume - Vulkan, Borderless).
+     RELEASE v0.2.6-prealpha (Linux only): ship\release-linux\SpyroRecomp-v0.2.6-prealpha-linux.tar.gz
+     (49.9 MB) + RELEASE_NOTES.md (new template RELEASE_NOTES_LINUX.md: install, Deck options, the .ini, known
+     issue = resolution change in the game -> use the .ini). README_LINUX.txt: settings file section, known
+     issue, layout. Repo README.md: Windows + Linux intro, Linux / Steam Deck section, Linux cross-build
+     section, layout rows. make-ship.ps1: TOOLS\linux scripts (not pkg-config.exe), make-ship-linux.ps1,
+     package_tar.py into the repo; gitignore lets TOOLS/linux/ in (not *.exe / *.obj). Windows build NOT
+     re-released (only change for Windows players later: the readable recomp_settings.ini).

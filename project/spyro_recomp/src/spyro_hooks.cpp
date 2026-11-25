@@ -39,6 +39,7 @@
 #include "plume_renderer.h"
 #include "spyro_achievements.h"
 #include "spyro_controls.h"
+#include "spyro_platform.h"
 #include "spyro_settings.h"
 
 namespace {
@@ -1572,7 +1573,8 @@ void ExitToDesktop() {
   if (found) PostMessageW(found, WM_CLOSE, 0, 0);
   else std::exit(0);
 #else
-  std::exit(0);
+  // Linux: the SDL window's close request = the user closing it (reXglue shuts down normally).
+  if (!spyro::platform::CloseGameWindow()) std::exit(0);
 #endif
 }
 

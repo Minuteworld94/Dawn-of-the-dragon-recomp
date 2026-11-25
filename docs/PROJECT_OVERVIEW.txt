@@ -245,10 +245,41 @@ Milestone 2 = title screen through our own renderer with no Xenia GPU code linke
 See the bottom of READ_WHEN_YOU_LOSE_CONTEXT_WORK_LOG.txt for the latest entries. The dated
 paragraphs further down are history (oldest first); THIS block is the current state.
 
-=== CURRENT STATE (updated 2026-11-20) ===
-LATEST RELEASE: Pre-alpha 2.5 "the (VERY experimental) keyboard and mouse update", tag v0.2.5-prealpha,
-  commit 5be1810 (WORK_LOG 153) - pushed + release page opened 11-20; the user attaches the zip and publishes
-  (check it with the GitHub API when they say so).
+=== CURRENT STATE (updated 2026-11-22) ===
+NATIVE LINUX PORT IN PROGRESS (user's goal: full native Linux build for their Steam Deck; NOT Proton; Linux
+  build = plume on its Vulkan backend only, no Xenos renderers; tools go in TOOLS). WORK_LOG 156-157:
+  DONE: plume Vulkan backend works (on Windows: env SPYRO_PLUMEVK=1 - verified identical to D3D12, 60 fps);
+  Windows-only code moved behind src\spyro_platform (Linux = SDL3); Linux CMake branches; 2 small SDK edits
+  (window_sdl.cpp). DECIDED 11-23: NO WSL - cross-compiled on Windows (WORK_LOG 158): preset
+  linux-cross-release + TOOLS\linux\toolchain-x86_64-linux.cmake (clang/lld, Steam Runtime sniper sysroot
+  in TOOLS\linux-sysroot with Valve's GCC 14, our TOOLS\linux\pkgconfig\pkg-config.exe), TOOLS\dxc-linux.
+  Build: . TOOLS\env.ps1; cd project\spyro_recomp; cmake --preset linux-cross-release
+  "-DREXSDK_DIR=<abs path>\TOOLS\src\rexglue-sdk"; cmake --build --preset linux-cross-release
+  (NEVER pass -DCMAKE_CXX_FLAGS). Package: project\make-ship-linux.ps1 -Version <v> -> ship\release-linux\
+  *.tar.gz. Linux launcher project\launcher\launcher_linux.cpp. Test 1 (11-23) on the Deck: ISO unpacked,
+  then "The game could not be started" (exec failed, no reason shown). Test 2 (11-24, WORK_LOG 160): launcher
+  runs the game as a child, says why when it cannot start / stops within 30 s, logs/launcher.log +
+  logs/game_output.log, sets the exec bit, loader fallback -> the game STARTED on the Deck but stopped:
+  "Entrypoint XEX not found" (disc file is "Default.xex", Linux is case-sensitive) + a glibc mutex abort
+  during teardown. Test 3 (11-24, WORK_LOG 161): case-insensitive XEX check (SDK rex_app.cpp), Linux ends the
+  process in OnShutdown (skips the crashing teardown), abort stack traces in game_output.log, binaries per
+  version in ship\symbols-linux\. -> RUNS on the Deck (6.5 min, clean exit) but letters one along / broken
+  icons / wrong colours. Test 4 (11-24, WORK_LOG 162): plume DataAddress added Windows' 0xE0000000-view host
+  offset (0x1000) on Linux too -> now only when allocation granularity > 4 KB; shm guest memory unlinked at
+  once + launcher clears leftovers. -> "IT WORKS" on the Deck. Test 5 (11-24, WORK_LOG 163): 800p fish eye
+  fixed (float rounding in plume's full-screen viewport test); resolution change softlocks ON THE DECK ONLY
+  (not on Windows Vulkan) - Linux hang dump + renderer state + game_output_previous.log added. Test 5 "works
+  great" on the Deck OLED. Released as v0.2.6-prealpha (Linux, WORK_LOG 164) with a readable, hand-editable
+  recomp_settings.ini next to SpyroRecomp (workaround for the in-game resolution softlock). STILL OPEN: the
+  softlock - need the user's logs (game_output.log / game_output_previous.log / spyro_ log with [hang] lines).
+  REMEMBER: guest address -> host pointer differs per OS only for 0xE0000000+ (Windows +0x1000, Linux +0).
+  Linux-only settings (WORK_LOG 159): Resolution 800p, Aspect ratio 16:9 / 16:10 (Vert+ via sub_823B31C8
+  hook), defaults 800p / 16:10 / Borderless.
+LATEST RELEASE: Pre-alpha 2.5 hotfix (button icons), tag v0.2.5-prealpha-hotfix, commit 1631972
+  (WORK_LOG 154-155) - pushed + release page opened 11-20; the user attaches the zip and publishes (check
+  with the GitHub API when they say so).
+  Before it: 2.5 "the (VERY experimental) keyboard and mouse update", tag v0.2.5-prealpha, commit 5be1810
+  (WORK_LOG 153), published 2026-11-21T00:53Z.
   Before it: 2.4 "the achievements update", tag v0.2.4-prealpha, commit 5cf6e09 (WORK_LOG 149).
   Before that: 2.3 "the MSAA update", v0.2.3-prealpha, commit 0d1b3d5 (WORK_LOG 140-141).
   Earlier: v0.1.0 (10-27), v0.2.0 (10-30), v0.2.1 "2-1" (11-08), v0.2.1-prealpha-hotfix (11-09).

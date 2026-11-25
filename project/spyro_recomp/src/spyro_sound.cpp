@@ -35,12 +35,7 @@
 #include <string>
 #include <vector>
 
-#if defined(_WIN32)
-#include <windows.h>
-#include <mmsystem.h>
-#pragma comment(lib, "winmm.lib")
-#endif
-
+#include "spyro_platform.h"
 #include "spyro_settings.h"
 
 extern "C" {
@@ -263,11 +258,9 @@ bool WhooshReady() { return g_ready.load(std::memory_order_acquire); }
 
 void PlayWhoosh() {
   if (!WhooshReady()) return;
-#if defined(_WIN32)
   // Asynchronous, from memory (g_wav never changes once ready); a new call cuts the last one.
-  BOOL ok = PlaySoundW(reinterpret_cast<LPCWSTR>(g_wav.data()), nullptr, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
-  REXLOG_INFO("[spyro/sound] whoosh played{}", ok ? "" : " - FAILED (PlaySound)");
-#endif
+  bool ok = platform::PlayWav(g_wav);
+  REXLOG_INFO("[spyro/sound] whoosh played{}", ok ? "" : " - FAILED");
 }
 
 }  // namespace spyro::sound

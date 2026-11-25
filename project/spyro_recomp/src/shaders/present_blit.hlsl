@@ -3,15 +3,34 @@
 // t0 space0, samplers in s0 space3, the root constant b3 space4 = descriptor index of the image.
 // Compiled at build time by dxc (CMakeLists.txt) into present_blit_vs.h / present_blit_ps.h.
 
+// Vulkan (SPIR-V, WORK_LOG 156): the same 16 bytes as push constants - scalars only, so the
+// offsets (0 / 4 / 8 / 12) are the D3D ones whatever layout rules apply.
+
 Texture2D<float4> g_Textures[] : register(t0, space0);
 SamplerState g_Samplers[] : register(s0, space3);
 
+#ifdef __spirv__
+struct BlitConstants
+{
+    uint Texture;
+    float DotX, DotY;
+    float DotRadius;
+    float Aspect;
+};
+[[vk::push_constant]] BlitConstants g_Blit;
+#define g_Texture g_Blit.Texture
+#define g_Dot float2(g_Blit.DotX, g_Blit.DotY)
+#define g_DotRadius g_Blit.DotRadius
+#define g_Aspect g_Blit.Aspect
+#else
 cbuffer Blit : register(b3, space4)
 {
     uint g_Texture;
     float2 g_Dot;       // lock-on target dot centre, 0..1 across the picture (spyro_lockon.cpp)
     float g_DotRadius;  // in picture heights; 0 = no dot
+    float g_Aspect;     // the picture's width / height (16:9, or 16:10 - WORK_LOG 159)
 };
+#endif
 
 struct VsOut
 {
@@ -34,8 +53,8 @@ float4 PSMain(VsOut i) : SV_Target
     float3 c = g_Textures[g_Texture].Sample(g_Samplers[1], i.uv).rgb;
     if (g_DotRadius > 0.0)
     {
-        // White dot with a soft dark rim (16:9: x distances in picture heights).
-        float2 d = (i.uv - g_Dot) * float2(16.0 / 9.0, 1.0);
+        // White dot with a soft dark rim (x distances in picture heights).
+        float2 d = (i.uv - g_Dot) * float2(g_Aspect, 1.0);
         float r = length(d) / g_DotRadius;
         float px = fwidth(r);
         float rim = 1.0 - smoothstep(1.45 - px, 1.45 + px, r);

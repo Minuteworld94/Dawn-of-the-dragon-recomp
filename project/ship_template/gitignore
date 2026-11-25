@@ -27,6 +27,10 @@ TOOLS/*
 !TOOLS/kxe/
 TOOLS/kxe/*.exe
 TOOLS/kxe/*.obj
+# Linux cross-compile scripts (source only; the sysroot / Linux dxc downloads stay out)
+!TOOLS/linux/
+TOOLS/linux/pkgconfig/*.exe
+TOOLS/linux/pkgconfig/*.obj
 TOOLS/_scripts/*.log
 
 # --- local play / test data ---

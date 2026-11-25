@@ -13,8 +13,33 @@ index 0b4708c..13efb94 100644
  // Queries a region of pages to get the access rights. This will modify the
  // length parameter to the length of pages with the same consecutive access
  // rights. The length will start from the first byte of the first page of
+diff --git a/resources/templates/init/rexglue_cmake.inja b/resources/templates/init/rexglue_cmake.inja
+index 97796d9..b682f55 100644
+--- a/resources/templates/init/rexglue_cmake.inja
++++ b/resources/templates/init/rexglue_cmake.inja
+@@ -114,6 +114,12 @@ endmacro()
+ # codegen, including one a project assembles itself rather than taking the
+ # library rexglue_setup_target() builds. The stamp comes first: the DEPFILE
+ # names it.
++if(CMAKE_CROSSCOMPILING)
++    # [spyro recomp] A cross build (e.g. Linux built on Windows): the rexglue it builds cannot run
++    # here, and the generated code is shared with the host build - running codegen is the host
++    # build's job.
++    add_custom_target({{ names.original }}_codegen)
++else()
+ add_custom_command(
+     OUTPUT "{{ cmake_var("CMAKE_CURRENT_SOURCE_DIR") }}/{{ entrypoint_out_dir }}/codegen.build.stamp"
+            {{ cmake_var("REXGLUE_ENTRYPOINT_GENERATED_SOURCES") }}
+@@ -125,6 +131,7 @@ add_custom_command(
+ )
+ add_custom_target({{ names.original }}_codegen
+     DEPENDS "{{ cmake_var("CMAKE_CURRENT_SOURCE_DIR") }}/{{ entrypoint_out_dir }}/codegen.build.stamp")
++endif()
+ 
+ # Include DLL module shared library targets if codegen has generated them
+ if(EXISTS "{{ cmake_var("CMAKE_CURRENT_SOURCE_DIR") }}/{{ entrypoint_out_dir }}/dll_targets.cmake")
 diff --git a/src/core/memory_posix.cpp b/src/core/memory_posix.cpp
-index b52bf39..f2665bd 100644
+index b52bf39..15038b4 100644
 --- a/src/core/memory_posix.cpp
 +++ b/src/core/memory_posix.cpp
 @@ -9,6 +9,7 @@
@@ -46,6 +71,17 @@ index b52bf39..f2665bd 100644
    if (out_old_access) {
      *out_old_access = PageAccess::kNoAccess;
    }
+@@ -483,6 +490,10 @@ FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path, siz
+     shm_unlink(full_path.c_str());
+     return kFileMappingHandleInvalid;
+   }
++  // [spyro recomp] Drop the name right away: the mapping lives on through the descriptor, and a
++  // process that ends without Shutdown (a crash, or the Linux build's quick exit) would otherwise
++  // leave the guest memory file in /dev/shm - RAM - until the next reboot (WORK_LOG 162).
++  shm_unlink(full_path.c_str());
+   return static_cast<FileMappingHandle>(ret);
+ #endif
+ }
 diff --git a/src/core/memory_win.cpp b/src/core/memory_win.cpp
 index 9a668e9..cb870ed 100644
 --- a/src/core/memory_win.cpp
@@ -127,6 +163,38 @@ index 306118e..492d8a9 100644
    // Even if presentation has failed, work might have been enqueued anyway
    // internally before the failure according to Jesse Natalie from the DirectX
    // Discord server.
+diff --git a/src/ui/rex_app.cpp b/src/ui/rex_app.cpp
+index 9ff54e8..2e9dfff 100644
+--- a/src/ui/rex_app.cpp
++++ b/src/ui/rex_app.cpp
+@@ -32,6 +32,7 @@
+ #include <rex/input/input_system.h>
+ #include <rex/kernel/init.h>
+ #include <rex/string/numeric.h>
++#include <rex/string/utf8.h>
+ #include <rex/system.h>
+ #include <rex/system/achievement_manager.h>
+ #include <rex/system/gpu_plugin.h>
+@@ -273,6 +274,19 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
+     std::string host_tail{tail};
+     std::replace(host_tail.begin(), host_tail.end(), '\\', '/');
+     auto xex_host = paths.game_data_root / host_tail;
++    // [spyro recomp] Linux file names are case-sensitive and the disc's file is "Default.xex":
++    // look for it ignoring case, like the VFS does (Entry::GetChild / HostPathDevice).
++    if (!std::filesystem::is_regular_file(xex_host)) {
++      std::error_code ec;
++      for (const auto& e : std::filesystem::directory_iterator(xex_host.parent_path(), ec)) {
++        if (rex::string::utf8_equal_case(rex::path_to_utf8(e.path().filename()),
++                                         rex::path_to_utf8(xex_host.filename())) &&
++            e.is_regular_file(ec)) {
++          xex_host = e.path();
++          break;
++        }
++      }
++    }
+     if (!std::filesystem::is_regular_file(xex_host)) {
+       auto msg = fmt::format("Entrypoint XEX not found: {}", xex_host.string());
+       REXLOG_ERROR("{}", msg);
 diff --git a/src/ui/vulkan/vulkan_presenter.cpp b/src/ui/vulkan/vulkan_presenter.cpp
 index 23645ef..7cc4c00 100644
 --- a/src/ui/vulkan/vulkan_presenter.cpp
@@ -144,3 +212,29 @@ index 23645ef..7cc4c00 100644
        std::find(present_modes.cbegin(), present_modes.cend(), VK_PRESENT_MODE_IMMEDIATE_KHR) !=
            present_modes.cend()) {
      // Allowing tearing to reduce latency, and possibly variable refresh rate
+diff --git a/src/ui/window_sdl.cpp b/src/ui/window_sdl.cpp
+index 6782cce..d937542 100644
+--- a/src/ui/window_sdl.cpp
++++ b/src/ui/window_sdl.cpp
+@@ -99,6 +99,11 @@ bool WindowSDL::OpenImpl() {
+   // SDL window coordinates are physical pixels on Windows and X11. Cocoa
+   // uses logical points and applies the backing scale itself.
+   SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN;
++#if !REX_PLATFORM_WIN32 && !REX_PLATFORM_MAC
++  // [spyro recomp] Linux: the app's own Vulkan renderer (plume) makes its surface with
++  // SDL_Vulkan_CreateSurface, which needs a Vulkan window (X11 and Wayland alike).
++  flags |= SDL_WINDOW_VULKAN;
++#endif
+ #if REX_PLATFORM_MAC
+   int initial_width = int(GetDesiredLogicalWidth());
+   int initial_height = int(GetDesiredLogicalHeight());
+@@ -181,6 +186,9 @@ void* WindowSDL::GetNativeWindowHandle() const {
+   }
+   return SDL_GetPointerProperty(SDL_GetWindowProperties(sdl_window_),
+                                 SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
++#elif !REX_PLATFORM_MAC
++  // [spyro recomp] Linux: the SDL_Window itself (the app renders into it with SDL's Vulkan support).
++  return sdl_window_;
+ #else
+   return nullptr;
+ #endif

@@ -11,6 +11,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace spyro::plume_renderer {
@@ -86,5 +87,8 @@ void RequestLogFrame();  // draw-log the next frame (as F9 does)
 // Time spent in the game's own D3D draw functions run to flush render state (plume_hooks), for
 // the [plume/time] profile.
 void AddFlushTime(double seconds);
+
+// One line for the hang log (hang_dump): frame, last renderer call, waiting for the GPU or not.
+std::string HangState();
 
 }  // namespace spyro::plume_renderer

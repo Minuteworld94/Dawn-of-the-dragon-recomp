@@ -101,6 +101,23 @@
             "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
         },
         {
+            "name": "linux-cross-release",
+            "displayName": "Linux AMD64 Release, cross-compiled on Windows (WORK_LOG 158)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "toolchainFile": "${sourceDir}/../../TOOLS/linux/toolchain-x86_64-linux.cmake",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "REXGLUE_USE_VULKAN": "ON",
+                "REXGLUE_ENABLE_TRACY": "OFF"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Windows"
+            }
+        },
+        {
             "name": "win-amd64-relwithdebinfo",
             "displayName": "Windows AMD64 RelWithDebInfo",
             "inherits": "windows-base",
@@ -192,6 +209,7 @@
         { "name": "linux-amd64-debug", "configurePreset": "linux-amd64-debug" },
         { "name": "linux-amd64-release", "configurePreset": "linux-amd64-release" },
         { "name": "linux-amd64-relwithdebinfo", "configurePreset": "linux-amd64-relwithdebinfo" },
+        { "name": "linux-cross-release", "configurePreset": "linux-cross-release" },
         { "name": "win-arm64-debug", "configurePreset": "win-arm64-debug" },
         { "name": "win-arm64-release", "configurePreset": "win-arm64-release" },
         { "name": "win-arm64-relwithdebinfo", "configurePreset": "win-arm64-relwithdebinfo" },

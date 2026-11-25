@@ -23,10 +23,9 @@
 #include <thread>
 #include <vector>
 
-#include <windows.h>
-
 #include "spyro_achievements.h"
 #include "spyro_kxe.h"
+#include "spyro_platform.h"  // keys (VK_* codes), focus, mouse position
 #include "spyro_settings.h"
 #include "spyro_ui.h"
 #define XXH_INLINE_ALL
@@ -152,7 +151,7 @@ std::string KeyName(uint16_t k) {
     return buf;
   }
   // Punctuation keys: the character on this keyboard layout.
-  UINT ch = MapVirtualKeyW(k, MAPVK_VK_TO_CHAR) & 0x7FFF;
+  uint32_t ch = platform::KeyChar(k);
   if (ch > 32 && ch < 127) return std::string(1, char(ch));
   std::snprintf(buf, sizeof(buf), "Key %02X", k);
   return buf;
@@ -250,7 +249,6 @@ bool ValidPad(const Layout& l) {
 
 // ---- window: mouse motion and the wheel -----------------------------------------------------------
 rex::ui::Window* g_window = nullptr;
-std::atomic<HWND> g_hwnd{nullptr};
 std::mutex g_mouse_mutex;
 double g_mouse_dx = 0, g_mouse_dy = 0;  // since the last poll (only while the mouse is captured)
 std::atomic<bool> g_captured{false};    // relative mouse mode on (UI thread state, mirrored)
@@ -273,10 +271,7 @@ class Listener : public rex::ui::WindowInputListener {
   }
 } g_listener;
 
-bool Focused() {
-  HWND h = g_hwnd.load();
-  return h && GetForegroundWindow() == h;
-}
+bool Focused() { return platform::GameWindowFocused(); }
 
 // Relative mouse mode (cursor hidden and locked, motion as deltas) while the mouse moves the camera.
 void SetCapture(bool on) {
@@ -334,8 +329,13 @@ std::vector<ScriptKey> LoadKeyScript() {
     } else {
       std::string want = name;
       std::replace(want.begin(), want.end(), '_', ' ');
+      auto same = [](const std::string& a, const std::string& b) {  // case-insensitive
+        return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
+                 return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y));
+               });
+      };
       for (uint16_t c = 1; c <= kWheelDown && !k.key; ++c)
-        if (_stricmp(KeyName(c).c_str(), want.c_str()) == 0) k.key = c;
+        if (same(KeyName(c), want)) k.key = c;
       if (!k.key) {
         REXLOG_ERROR("[spyro/controls] key script: unknown key '{}'", name);
         continue;
@@ -371,7 +371,7 @@ bool KeyDown(uint16_t key, bool focused) {
   if (ScriptKeyDown(key)) return true;
   if (key == kWheelUp) return Now() < g_wheel_up_until;
   if (key == kWheelDown) return Now() < g_wheel_down_until;
-  return focused && (GetAsyncKeyState(key) & 0x8000) != 0;
+  return focused && platform::KeyDown(key);
 }
 
 // The game's current menu: where there is none (boot logos, title, gameplay) Esc / Enter are Start;
@@ -599,8 +599,7 @@ void Attach(rex::ui::Window* window, const std::filesystem::path& game_root) {
     std::thread(ReadParchmentFromFiles, game_root).detach();
   }
   if (!window || g_window) return;
-  g_window = window;
-  g_hwnd = HWND(window->GetNativeWindowHandle());
+  g_window = window;  // (focus / keys: spyro::platform, given the window by the app)
   window->AddInputListener(&g_listener, 1000);  // first in line; never marks events handled
   REXLOG_INFO("[spyro/controls] attached to the game window");
 }
@@ -880,7 +879,7 @@ void ReadParchmentFromFiles(std::filesystem::path game_root) {
   std::error_code ec;
   if (g_parchment.captured || std::filesystem::exists(g_parchment.file, ec)) return;  // have it
   auto start = Clock::now();
-  std::filesystem::path file = game_root / "Data" / "LVL000" / "LVL000.KXE";
+  std::filesystem::path file = platform::FindNoCase(game_root, {"Data", "LVL000", "LVL000.KXE"});
   constexpr size_t kLevel0 = 1024 * 1024;  // 256 x 256 blocks of 16 bytes
   std::vector<uint8_t> dds;
   if (!kxe::Read(file, kParchmentOffset - 128, 128 + kLevel0, dds)) {
@@ -1215,7 +1214,7 @@ void Commit(const Layout& l, const char* what) {
 void StartWait() {
   g_ui.waiting = true;
   g_ui.wait_start = Now();
-  for (uint16_t k = 1; k < 256; ++k) g_ui.wait_keys[k] = (GetAsyncKeyState(k) & 0x8000) != 0 || ScriptKeyDown(k);
+  for (uint16_t k = 1; k < 256; ++k) g_ui.wait_keys[k] = platform::KeyDown(k) || ScriptKeyDown(k);
   g_ui.wait_buttons = g_raw_buttons | ((g_raw_triggers & 0xFF) > 30 ? 0x10000u : 0) |
                       ((g_raw_triggers >> 8) > 30 ? 0x20000u : 0);
   g_ui.wait_wheel = g_wheel_ui.load();
@@ -1309,7 +1308,7 @@ void HandleWait(bool focused) {
     Notice("Nothing changed (no key pressed)");
     return;
   }
-  bool esc = (focused && (GetAsyncKeyState(VK_ESCAPE) & 0x8000)) || ScriptKeyDown(VK_ESCAPE);
+  bool esc = (focused && platform::KeyDown(VK_ESCAPE)) || ScriptKeyDown(VK_ESCAPE);
   if (esc && !g_ui.wait_keys[VK_ESCAPE]) {
     g_ui.waiting = false;
     g_ui.prev_keys[3] = true;  // the Esc must not also close the screen
@@ -1332,7 +1331,7 @@ void HandleWait(bool focused) {
       if (k == VK_ESCAPE || k == VK_RETURN || k == VK_SHIFT || k == VK_CONTROL || k == VK_MENU || k == VK_LWIN ||
           k == VK_RWIN || k == VK_PROCESSKEY || k == VK_PACKET)
         continue;
-      bool down = (focused && (GetAsyncKeyState(k) & 0x8000)) || ScriptKeyDown(k);
+      bool down = (focused && platform::KeyDown(k)) || ScriptKeyDown(k);
       if (down && !g_ui.wait_keys[k]) got = k;
       if (!down) g_ui.wait_keys[k] = false;
     }
@@ -1370,7 +1369,7 @@ Nav ReadNav(bool focused) {
   int32_t lx = g_raw_lx.load(), ly = g_raw_ly.load();
   uint32_t pressed = buttons & ~g_ui.prev_buttons;
   g_ui.prev_buttons = buttons;
-  auto key = [&](int vk) { return (focused && (GetAsyncKeyState(vk) & 0x8000) != 0) || ScriptKeyDown(uint16_t(vk)); };
+  auto key = [&](int vk) { return (focused && platform::KeyDown(vk)) || ScriptKeyDown(uint16_t(vk)); };
   bool keys[8] = {key(VK_UP), key(VK_DOWN), key(VK_RETURN) || key(VK_SPACE), key(VK_ESCAPE) || key(VK_BACK),
                   key(VK_DELETE), key(VK_LEFT), key(VK_RIGHT), false};
   bool edge[8];
@@ -1400,12 +1399,10 @@ Nav ReadNav(bool focused) {
 
 void ReadMouse(bool focused) {
   g_ui.mouse_x = g_ui.mouse_y = -1;
-  HWND h = g_hwnd.load();
-  if (!focused || !h || g_captured) return;
-  POINT p;
-  if (!GetCursorPos(&p) || !ScreenToClient(h, &p)) return;
-  g_ui.mouse_x = float(p.x);
-  g_ui.mouse_y = float(p.y);
+  int x = 0, y = 0;
+  if (!focused || g_captured || !platform::MousePosition(x, y)) return;
+  g_ui.mouse_x = float(x);
+  g_ui.mouse_y = float(y);
 }
 
 const Ui::Hit* HitAt(float x, float y) {
@@ -1447,8 +1444,8 @@ void HandleScreenInput(bool focused) {
   }
   Nav n = ReadNav(focused);
   ReadMouse(focused);
-  bool lmb = focused && (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
-  bool rmb = focused && (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+  bool lmb = focused && platform::KeyDown(VK_LBUTTON);
+  bool rmb = focused && platform::KeyDown(VK_RBUTTON);
   bool click = lmb && !g_ui.prev_lmb, rclick = rmb && !g_ui.prev_rmb;
   g_ui.prev_lmb = lmb;
   g_ui.prev_rmb = rmb;

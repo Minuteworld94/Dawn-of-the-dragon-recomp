@@ -80,8 +80,13 @@ foreach ($f in "fetch-binaries.ps1", "fetch-sources.ps1", "fix-symlinks.ps1", "p
 Copy-To "$template\apply-patches.ps1" "$repo\TOOLS\_scripts\apply-patches.ps1"
 # Our .KXE unpacker (research tool, WORK_LOG 154): source + build/run scripts, never its exe or output.
 foreach ($f in "kxe_unpack.cpp", "build.ps1", "run.ps1") { Copy-To "$tools\kxe\$f" "$repo\TOOLS\kxe\$f" }
+# Linux cross-compile scripts (WORK_LOG 158): toolchain file, sysroot extractor, pkg-config source.
+foreach ($f in "toolchain-x86_64-linux.cmake", "extract_sysroot.py", "pkgconfig\pkg-config.cpp", "pkgconfig\build.ps1") {
+    Copy-To "$tools\linux\$f" "$repo\TOOLS\linux\$f"
+}
 # Project sources.
-foreach ($f in "PLAY.bat", "CAMERA-TEST.bat", "TEST-ACHIEVEMENT-POPUP.bat", "run-game.ps1", "make-ship.ps1") { Copy-To "$project\$f" "$repo\project\$f" }
+foreach ($f in "PLAY.bat", "CAMERA-TEST.bat", "TEST-ACHIEVEMENT-POPUP.bat", "run-game.ps1", "make-ship.ps1",
+               "make-ship-linux.ps1", "package_tar.py") { Copy-To "$project\$f" "$repo\project\$f" }
 Copy-Item "$template" "$repo\project\ship_template" -Recurse
 foreach ($f in "CMakeLists.txt", "CMakePresets.json", "spyrodotd_manifest.toml", "functions_auto.toml") {
     Copy-To "$project\spyro_recomp\$f" "$repo\project\spyro_recomp\$f"

@@ -13,9 +13,7 @@
 #include <iterator>
 #include <mutex>
 
-#if defined(_WIN32)
-#include <windows.h>
-#endif
+#include "spyro_platform.h"
 
 // A private copy of stb_truetype (ImGui's bundled one), internal to this file.
 #define STBTT_STATIC
@@ -32,8 +30,9 @@ std::vector<TextureUpload> g_uploads;
 
 // ---- fonts -------------------------------------------------------------------------------------
 // Segoe UI (the Xbox 360 dashboard's font family), read from the Windows font folder - nothing
-// ships with the release. Baked once at kBasePx into one 2048x2048 alpha atlas, 2x2 oversampled,
-// characters 32..255 (ASCII + Latin-1); drawn scaled.
+// ships with the Windows release. Linux: Segoe UI or Selawik in fonts\ next to the game, else a
+// system font (spyro_platform.cpp FontFiles). Baked once at kBasePx into one 2048x2048 alpha
+// atlas, 2x2 oversampled, characters 32..255 (ASCII + Latin-1); drawn scaled.
 constexpr float kBasePx = 40.0f;
 constexpr int kAtlas = 2048;
 constexpr int kFirstChar = 32, kCharCount = 224;
@@ -46,26 +45,27 @@ FontData g_fonts[kFontCount];
 uint32_t g_font_texture = 0;
 bool g_fonts_tried = false;
 
-std::vector<uint8_t> ReadFile(const std::wstring& path) {
+std::vector<uint8_t> ReadFile(const std::filesystem::path& path) {
   std::ifstream f(path, std::ios::binary);
   return std::vector<uint8_t>((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
 }
 
 void LoadFonts() {
   g_fonts_tried = true;
-  std::wstring dir = L"C:\\Windows\\Fonts\\";
-#if defined(_WIN32)
-  wchar_t win[MAX_PATH];
-  if (UINT n = GetWindowsDirectoryW(win, MAX_PATH); n && n < MAX_PATH) dir = std::wstring(win) + L"\\Fonts\\";
-#endif
-  const wchar_t* kFiles[kFontCount] = {L"segoeui.ttf", L"seguisb.ttf", L"segoeuib.ttf"};
   std::vector<uint8_t> ttf[kFontCount];
+  std::string used;
   for (int i = 0; i < kFontCount; ++i) {
-    ttf[i] = ReadFile(dir + kFiles[i]);
+    for (const std::filesystem::path& p : platform::FontFiles(i)) {
+      ttf[i] = ReadFile(p);
+      if (!ttf[i].empty()) {
+        if (i == 0) used = p.string();
+        break;
+      }
+    }
     if (ttf[i].empty() && i > 0) ttf[i] = ttf[0];  // no semibold / bold: regular instead
   }
   if (ttf[0].empty()) {
-    REXLOG_WARN("[spyro/ui] Segoe UI not found in the Windows font folder - overlay text disabled");
+    REXLOG_WARN("[spyro/ui] no overlay font found (Segoe UI / fonts folder / system fonts) - overlay text disabled");
     return;
   }
   std::vector<uint8_t> atlas(size_t(kAtlas) * kAtlas, 0);
@@ -89,7 +89,7 @@ void LoadFonts() {
   for (int i = 1; i < kFontCount; ++i)
     if (!g_fonts[i].ok) g_fonts[i] = g_fonts[0];
   g_font_texture = CreateTexture(kAtlas, kAtlas, TextureFormat::kAlpha8, atlas.data());
-  REXLOG_INFO("[spyro/ui] Segoe UI baked ({}x{} atlas, texture {})", kAtlas, kAtlas, g_font_texture);
+  REXLOG_INFO("[spyro/ui] font baked from {} ({}x{} atlas, texture {})", used, kAtlas, kAtlas, g_font_texture);
 }
 
 // ---- frame -------------------------------------------------------------------------------------

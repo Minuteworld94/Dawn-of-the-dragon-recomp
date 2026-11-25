@@ -22,11 +22,9 @@
 #include <string>
 #include <vector>
 
-#if defined(_WIN32)
-#include <windows.h>
-#endif
 
 #include "spyro_controls.h"
+#include "spyro_platform.h"
 #include "spyro_sound.h"
 #include "spyro_ui.h"
 
@@ -286,8 +284,8 @@ void HandleListInput(bool focused) {
   if ((buttons & 0x0001) || ly > 16000) dir = -1;  // D-pad up / stick up
   if ((buttons & 0x0002) || ly < -16000) dir = 1;   // D-pad down / stick down
   // Keyboard: arrows, Page Up / Down, Esc.
-  bool up = focused && (GetAsyncKeyState(VK_UP) & 0x8000), down = focused && (GetAsyncKeyState(VK_DOWN) & 0x8000);
-  bool esc = focused && (GetAsyncKeyState(VK_ESCAPE) & 0x8000);
+  bool up = focused && platform::KeyDown(VK_UP), down = focused && platform::KeyDown(VK_DOWN);
+  bool esc = focused && platform::KeyDown(VK_ESCAPE);
   if (up) dir = -1;
   if (down) dir = 1;
   if (dir != 0 && (dir != g_prev_dir || now >= g_repeat_at)) {
@@ -525,9 +523,9 @@ void HandleQuestionInput(bool focused) {
   int dir = 0;
   if ((buttons & 0x0004) || lx < -16000) dir = -1;  // D-pad left / stick left
   if ((buttons & 0x0008) || lx > 16000) dir = 1;    // D-pad right / stick right
-  bool left = focused && (GetAsyncKeyState(VK_LEFT) & 0x8000), right = focused && (GetAsyncKeyState(VK_RIGHT) & 0x8000);
-  bool enter = focused && ((GetAsyncKeyState(VK_RETURN) & 0x8000) || (GetAsyncKeyState(VK_SPACE) & 0x8000));
-  bool esc = focused && ((GetAsyncKeyState(VK_ESCAPE) & 0x8000) || (GetAsyncKeyState('N') & 0x8000));
+  bool left = focused && platform::KeyDown(VK_LEFT), right = focused && platform::KeyDown(VK_RIGHT);
+  bool enter = focused && (platform::KeyDown(VK_RETURN) || platform::KeyDown(VK_SPACE));
+  bool esc = focused && (platform::KeyDown(VK_ESCAPE) || platform::KeyDown('N'));
   if (dir != 0 && dir != g_q_prev_dir) g_yes = dir < 0;  // Yes is on the left
   g_q_prev_dir = dir;
   if (left && !g_q_prev_left) g_yes = true;
@@ -773,8 +771,8 @@ void BuildOverlay(float window_w, float window_h, float game_x, float game_y, fl
   bool controls = spyro::controls::MenuOpen();
   // 1 (top row or numpad) toggles the list (not while a question is up).
   bool key1 = window_focused && !controls &&
-              (((GetAsyncKeyState('1') & 0x8000) && !spyro::controls::KeyIsBound('1')) ||
-               ((GetAsyncKeyState(VK_NUMPAD1) & 0x8000) && !spyro::controls::KeyIsBound(VK_NUMPAD1)));
+              ((platform::KeyDown('1') && !spyro::controls::KeyIsBound('1')) ||
+               (platform::KeyDown(VK_NUMPAD1) && !spyro::controls::KeyIsBound(VK_NUMPAD1)));
   if (key1 && !g_prev_key1 && !asking) {
     g_open = !g_open;
     REXLOG_INFO("[spyro/achievements] list {}", g_open ? "opened (1 key)" : "closed (1 key)");
@@ -782,9 +780,9 @@ void BuildOverlay(float window_w, float window_h, float game_x, float game_y, fl
   g_prev_key1 = key1;
   // Delete turns achievements off (asks first) or back on (WORK_LOG 152); Insert asks whether to
   // reset them all (WORK_LOG 148).
-  bool del = window_focused && !controls && (GetAsyncKeyState(VK_DELETE) & 0x8000) &&
+  bool del = window_focused && !controls && platform::KeyDown(VK_DELETE) &&
              !spyro::controls::KeyIsBound(VK_DELETE);
-  bool ins = window_focused && !controls && (GetAsyncKeyState(VK_INSERT) & 0x8000) &&
+  bool ins = window_focused && !controls && platform::KeyDown(VK_INSERT) &&
              !spyro::controls::KeyIsBound(VK_INSERT);
   bool toggle_request = g_toggle_request.exchange(false), reset_request = g_reset_request.exchange(false);
   if (!asking && g_loaded) {

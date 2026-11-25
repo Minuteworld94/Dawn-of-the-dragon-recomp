@@ -4,7 +4,8 @@
 // (LVL000.KXE, compressed, not loaded in levels), so it can't be played through the game's sound
 // system during play. Instead it is recorded from the game's own audio mix the first time the
 // Game Menu comes in each session - the music has stopped by then, so the whoosh is alone - and
-// played back with Windows' PlaySound when a popup appears. Nothing is written to disk.
+// played back when a popup appears (spyro_platform.cpp PlayWav: PlaySound on Windows, SDL audio
+// on Linux). Nothing is written to disk.
 #pragma once
 
 #include <cstdint>

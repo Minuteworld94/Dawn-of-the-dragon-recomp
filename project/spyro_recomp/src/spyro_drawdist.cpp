@@ -35,7 +35,11 @@
 
 #include "guest_memory.h"
 #include "plume_renderer.h"
+#include "spyro_platform.h"  // research stack traces: CaptureStack / ExeBase
 #include "spyro_settings.h"
+
+using spyro::platform::CaptureStack;
+using spyro::platform::ExeBase;
 
 extern "C" {
 REX_EXTERN(__imp__sub_820DA658);  // render camera setup (r3 = scene renderer)
@@ -92,6 +96,37 @@ float FarScale() {
 
 }  // namespace
 
+// Aspect ratio 16:10 (Linux / Steam Deck port, WORK_LOG 159). sub_823B31C8(camera, float2*) is the
+// game's "set the view's opening" for every camera: +0x68 / +0x6C = horizontal / vertical
+// half-opening (tangents), +0x70 / +0x74 their inverses, then the camera node is marked changed.
+// The game asks for 16:9 views; for 16:10 the vertical one becomes horizontal / 1.6 ("Vert+": same
+// width of view, a little more above and below - the game culls with it too), and plume shows the
+// 16:9 frame at 16:10, so shapes come out right. Copies of an already-changed camera (the render
+// cameras take the game camera's values through here) are 16:10 already and left alone. (Hooking only
+// the far scene's render camera in sub_820DA658 was not enough: the near pass stayed 16:9.)
+extern "C" REX_EXTERN(__imp__sub_823B31C8);
+extern "C" REX_FUNC(sub_823B31C8) {
+  uint32_t cam = ctx.r3.u32;
+  __imp__sub_823B31C8(ctx, base);
+  const float aspect = spyro::PictureAspect();
+  if (aspect > 1.7f || !spyro::GuestReadable(base, cam, 0x80)) return;  // 16:9: the game's own view
+  float tx = LoadF(base, cam + 0x68), ty = LoadF(base, cam + 0x6C), inv_y = LoadF(base, cam + 0x74);
+  if (!(tx > 0 && ty > 0 && tx < 100 && ty < 100)) return;
+  if (std::fabs(tx / ty - 16.0f / 9.0f) > 0.05f) return;  // not a 16:9 view (or already 16:10)
+  float ny = tx / aspect;
+  StoreF(base, cam + 0x6C, ny);
+  StoreF(base, cam + 0x74, inv_y * ty / ny);  // the game's constant over the tangent, as it does
+  uint32_t node = Load32(base, cam + 4);
+  if (node) Call(ctx, base, sub_823B3ED0, node);
+  static int s_logged = 0;
+  if (s_logged++ < 8)
+    REXLOG_INFO("[spyro/aspect] camera 0x{:08X}: half-opening {:.3f} x {:.3f} -> {:.3f} x {:.3f} ({:.2f}:1)", cam, tx,
+                ty, tx, ny, aspect);
+}
+
+namespace {
+}  // namespace
+
 // THE per-object distance check (found with the bucket-count watchpoint below): the scene walk
 // (sub_820ED200 / sub_820FFD50 / sub_820F0A70 / sub_820EB910 ...) hands each object to
 // sub_820EC4F8 / sub_820F1130, which call sub_82109918(object, ..., r7 = check distance, f1 = max
@@ -141,10 +176,10 @@ extern "C" REX_FUNC(sub_82109918) {
     uint32_t obj = ctx.r3.u32, tf = Load32(base, obj + 28);
     if (s_seen.size() < 6000 && spyro::GuestReadable(base, tf, 0x38) && s_seen.insert(obj).second) {
       void* frames[24];
-      USHORT n = RtlCaptureStackBackTrace(1, 24, frames, nullptr);
-      uintptr_t exe = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr));
+      uint16_t n = CaptureStack(frames, 24);
+      uintptr_t exe = ExeBase();
       std::string s;
-      for (USHORT i = 0; i < n; ++i) s += fmt::format(" {:X}", reinterpret_cast<uintptr_t>(frames[i]) - exe);
+      for (uint16_t i = 0; i < n; ++i) s += fmt::format(" {:X}", reinterpret_cast<uintptr_t>(frames[i]) - exe);
       // The bucket it goes to: [r4 + ([obj+20] & 31) * 4], added with its vt slot 0.
       uint32_t bucket = Load32(base, ctx.r4.u32 + (Load32(base, obj + 20) & 31) * 4);
       uint32_t bvt = spyro::GuestReadable(base, bucket, 4) ? Load32(base, bucket) : 0;
@@ -661,10 +696,10 @@ extern "C" REX_FUNC(sub_820DDEE0) {
         s_seen.insert(item).second) {
       uint32_t vt = spyro::GuestReadable(base, item, 4) ? Load32(base, item) : 0;
       void* frames[4];
-      USHORT n = RtlCaptureStackBackTrace(1, 4, frames, nullptr);
-      uintptr_t exe = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr));
+      uint16_t n = CaptureStack(frames, 4);
+      uintptr_t exe = ExeBase();
       std::string s;
-      for (USHORT i = 0; i < n; ++i) s += fmt::format(" {:X}", reinterpret_cast<uintptr_t>(frames[i]) - exe);
+      for (uint16_t i = 0; i < n; ++i) s += fmt::format(" {:X}", reinterpret_cast<uintptr_t>(frames[i]) - exe);
       REXLOG_INFO("[spyro/push] item 0x{:08X} vt 0x{:08X} bucket vt 0x{:08X} |{}", item, vt, owner_vt, s);
     }
   }
@@ -841,13 +876,13 @@ extern "C" REX_FUNC(sub_820DCA38) {
   if (s_on) {
     static std::unordered_set<uint64_t> s_seen;
     void* frames[40];
-    USHORT n = RtlCaptureStackBackTrace(1, 40, frames, nullptr);
+    uint16_t n = CaptureStack(frames, 40);
     uint64_t h = 1469598103934665603ull;
-    for (USHORT i = 0; i < n; ++i) h = (h ^ reinterpret_cast<uintptr_t>(frames[i])) * 1099511628211ull;
+    for (uint16_t i = 0; i < n; ++i) h = (h ^ reinterpret_cast<uintptr_t>(frames[i])) * 1099511628211ull;
     if (s_seen.size() < 300 && s_seen.insert(h).second) {
-      uintptr_t exe = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr));
+      uintptr_t exe = ExeBase();
       std::string s;
-      for (USHORT i = 0; i < n; ++i) s += fmt::format(" {:X}", reinterpret_cast<uintptr_t>(frames[i]) - exe);
+      for (uint16_t i = 0; i < n; ++i) s += fmt::format(" {:X}", reinterpret_cast<uintptr_t>(frames[i]) - exe);
       uint32_t item = ctx.r4.u32;
       uint32_t vt = spyro::GuestReadable(base, item, 4) ? Load32(base, item) : 0;
       REXLOG_INFO("[plume/stack] add stack {} item 0x{:08X} vt 0x{:08X} |{}", s_seen.size(), item, vt, s);
@@ -867,13 +902,13 @@ extern "C" REX_FUNC(sub_820DDE88) {
     if (owner_vt >= 0x82066F90u && owner_vt <= 0x82067054u) {
       static std::unordered_set<uint64_t> s_seen;
       void* frames[40];
-      USHORT n = RtlCaptureStackBackTrace(1, 40, frames, nullptr);
+      uint16_t n = CaptureStack(frames, 40);
       uint64_t h = 1469598103934665603ull;
-      for (USHORT i = 0; i < n; ++i) h = (h ^ reinterpret_cast<uintptr_t>(frames[i])) * 1099511628211ull;
+      for (uint16_t i = 0; i < n; ++i) h = (h ^ reinterpret_cast<uintptr_t>(frames[i])) * 1099511628211ull;
       if (s_seen.size() < 300 && s_seen.insert(h).second) {
-        uintptr_t exe = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr));
+        uintptr_t exe = ExeBase();
         std::string s;
-        for (USHORT i = 0; i < n; ++i) s += fmt::format(" {:X}", reinterpret_cast<uintptr_t>(frames[i]) - exe);
+        for (uint16_t i = 0; i < n; ++i) s += fmt::format(" {:X}", reinterpret_cast<uintptr_t>(frames[i]) - exe);
         uint32_t item = ctx.r4.u32;
         uint32_t vt = spyro::GuestReadable(base, item, 4) ? Load32(base, item) : 0;
         REXLOG_INFO("[plume/stack] push stack {} bucket vt 0x{:08X} item 0x{:08X} vt 0x{:08X} |{}", s_seen.size(),
@@ -900,7 +935,7 @@ LONG CALLBACK WatchHandler(EXCEPTION_POINTERS* info) {
   if (s_seen.size() < 120) {
     // Walk from the interrupted code (the instruction after the write).
     CONTEXT u = *info->ContextRecord;
-    uintptr_t exe = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr));
+    uintptr_t exe = ExeBase();
     uintptr_t frames[32];
     int n = 0;
     for (int depth = 0; depth < 64 && n < 32 && u.Rip; ++depth) {
@@ -959,6 +994,8 @@ extern "C" REX_FUNC(sub_820DA658) {
   PollSectors(base);
   // Research (env SPYRO_LOGBUCKETS): the scene's 11 render buckets (+80..+120; sub_820DB210 asks
   // each vt+8 "empty?" and calls vt+24 to draw it), once a level is up.
+  static uint32_t s_level_frames = 0;  // game frames since the level came up (research timers below)
+  s_level_frames = spyro::CurrentMenuId() == 0x24 ? s_level_frames + 1 : 0;
 #if defined(_WIN32)
   static const int s_watch = std::getenv("SPYRO_WATCHBUCKET") ? std::atoi(std::getenv("SPYRO_WATCHBUCKET")) : -1;
   static bool s_armed = false;
@@ -971,8 +1008,6 @@ extern "C" REX_FUNC(sub_820DA658) {
   // armed 10 s into the level (a tree object's +12, the distance value of the LOD hunt).
   static const uint32_t s_watch_addr =
       std::getenv("SPYRO_WATCHADDR") ? uint32_t(std::strtoul(std::getenv("SPYRO_WATCHADDR"), nullptr, 16)) : 0;
-  static uint32_t s_level_frames = 0;
-  s_level_frames = spyro::CurrentMenuId() == 0x24 ? s_level_frames + 1 : 0;
   if (s_watch_addr && !s_armed && s_level_frames > 600 && spyro::GuestReadable(base, s_watch_addr, 4)) {
     s_armed = true;
     ArmWatch(GetCurrentThreadId(), reinterpret_cast<uintptr_t>(base + s_watch_addr));

@@ -39,7 +39,28 @@ bool GuestReadable(const uint8_t* base, uint32_t addr, uint32_t len) {
   t_regions[start] = end;
   return uint64_t(addr) + len <= end;
 #else
-  return true;
+  // Linux (WORK_LOG 156): the SDK's page query (/proc/self/maps), cached the same way. It reports
+  // from the page of addr to the end of that mapping.
+  thread_local std::map<uint32_t, uint64_t> t_regions;
+  thread_local uint32_t t_generation = rex::memory::UnmapGeneration();
+  uint32_t gen = rex::memory::UnmapGeneration();
+  if (gen != t_generation) {
+    t_generation = gen;
+    t_regions.clear();
+  }
+  if (auto it = t_regions.upper_bound(addr); it != t_regions.begin()) {
+    --it;
+    if (addr >= it->first && uint64_t(addr) + len <= it->second) return true;
+  }
+  uint32_t page = addr & ~0xFFFu;
+  size_t length = 0;
+  rex::memory::PageAccess access = rex::memory::PageAccess::kNoAccess;
+  if (!rex::memory::QueryProtect(const_cast<uint8_t*>(base) + page, length, access) ||
+      access == rex::memory::PageAccess::kNoAccess)
+    return false;
+  uint64_t end = std::min<uint64_t>(uint64_t(page) + length, 0x100000000ull);
+  t_regions[page] = end;
+  return uint64_t(addr) + len <= end;
 #endif
 }
 

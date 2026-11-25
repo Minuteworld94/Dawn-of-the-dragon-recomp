@@ -12,6 +12,10 @@ namespace spyro::shader_translator {
 
 enum class State { kPending, kReady, kFailed };
 
+// plume's Vulkan backend wants SPIR-V (shader_cache\<HASH>.spv) instead of DXIL; set once by the
+// renderer before the first request (WORK_LOG 156).
+void SetSpirv(bool spirv);
+
 // Starts translating the shader container (the game's bytes as created, big-endian) unless it is
 // already on disk, translated or queued.
 void Request(uint64_t hash, const uint8_t* container, uint32_t size);
